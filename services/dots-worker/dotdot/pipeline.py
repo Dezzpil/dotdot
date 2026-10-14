@@ -22,8 +22,8 @@ LEVELS = {
     "school": (2.0, 150, 8.0, 2.0, 8.0, 45.0, 60.0),
     "adult": (1.0, 320, 6.5, 1.6, 5.5, 28.0, 30.0),
 }
-# math examples are wider than numbers: fewer dots so they fit
-MATH_CAP = 0.65
+# math examples are wider than numbers: level -> (dot cap factor, spacing factor)
+MATH_ROOM = {"kid": (1.0, 1.0), "school": (0.65, 1.15), "adult": (0.55, 1.25)}
 
 
 def _close_almost_loops(strokes: list[Stroke], gap: float) -> list[Stroke]:
@@ -67,7 +67,10 @@ def generate(data: bytes, opts: Options) -> Result:
     opts.validate()
     eps0, cap, font_size, dot_r, dmin, maxseg, detail = LEVELS[opts.level]
     if opts.labels == "math":
-        cap = int(cap * MATH_CAP)
+        # wider labels need more room: fewer dots and a larger minimum distance
+        k_cap, k_space = MATH_ROOM[opts.level]
+        cap = int(cap * k_cap)
+        dmin *= k_space
     prep = prepare(data)
     sw = prep.stroke_width
     g = build_graph(prep.ink)
