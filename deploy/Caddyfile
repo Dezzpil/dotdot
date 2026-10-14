@@ -25,9 +25,9 @@
 		}
 	}
 
-	# the web app (next step) will be served here
+	# everything else is the web app (static files, own cache headers)
 	handle {
-		respond "DotDot is warming up its pencils." 200
+		reverse_proxy web:8080
 	}
 
 	header {

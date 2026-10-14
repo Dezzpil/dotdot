@@ -38,7 +38,7 @@ pytest -q
 
 | Var | Default | |
 |---|---|---|
-| `REDIS_URL` | redis://localhost:6379 | |
+| `REDIS_URL` | redis://localhost:6379 | `socket_timeout=30` is added unless set: it must exceed BullMQ's 5 s blocking wait |
 | `QUEUE_NAME` / `QUEUE_PREFIX` | dots / dotdot | must match the API |
 | `STORAGE_DIR` | /data | shared volume |
 | `WORKER_CONCURRENCY` | 1 | keep 1; scale with container replicas |

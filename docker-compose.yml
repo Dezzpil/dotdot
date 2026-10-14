@@ -69,6 +69,17 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  web:
+    build: ./apps/web
+    # static files only: one tiny container is plenty
+    deploy:
+      replicas: ${WEB_REPLICAS:-1}
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    restart: unless-stopped
+
   caddy:
     image: caddy:2-alpine
     ports:
@@ -84,6 +95,7 @@ services:
       - caddy-config:/config
     depends_on:
       - api
+      - web
     restart: unless-stopped
 
 volumes:

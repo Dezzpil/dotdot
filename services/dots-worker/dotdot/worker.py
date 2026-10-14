@@ -33,6 +33,18 @@ CONCURRENCY = int(os.environ.get("WORKER_CONCURRENCY", "1"))
 JOB_TIMEOUT = float(os.environ.get("JOB_TIMEOUT_SEC", "60"))
 
 
+def redis_url(url: str) -> str:
+    """Give the socket more time than BullMQ's blocking wait for new jobs.
+
+    redis-py 8 defaults to socket_timeout=5 s, exactly BullMQ's 5 s BZPOPMIN wait: the client
+    drops the connection right when Redis answers "nothing yet", then reconnects with backoff.
+    New jobs waited up to ~10 s and a running job could stall on its next Redis call.
+    """
+    if "socket_timeout=" in url:
+        return url
+    return url + ("&" if "?" in url else "?") + "socket_timeout=30"
+
+
 def _safe_path(rel: str) -> pathlib.Path:
     p = (STORAGE_DIR / rel).resolve()
     if STORAGE_DIR.resolve() not in p.parents:
@@ -58,7 +70,9 @@ async def process(job, token):
         opts.validate()
     except (BadOptionsError, TypeError) as e:
         raise UnrecoverableError(f"BAD_OPTIONS: {e}")
+    log.debug("job %s: start", job_id)
     await job.updateProgress(10)
+    log.debug("job %s: progress 10 saved", job_id)
     raw = await asyncio.to_thread(src.read_bytes)
     try:
         res = await asyncio.wait_for(asyncio.to_thread(generate, raw, opts), JOB_TIMEOUT)
@@ -66,7 +80,9 @@ async def process(job, token):
         raise UnrecoverableError(f"BAD_IMAGE: {e}")
     except asyncio.TimeoutError:
         raise UnrecoverableError("TIMEOUT: drawing is too complex")
+    log.debug("job %s: generated", job_id)
     await job.updateProgress(90)
+    log.debug("job %s: progress 90 saved", job_id)
     out = _safe_path(job_id)
     out.mkdir(parents=True, exist_ok=True)
     files = {"pdf": "dotdot.pdf", "puzzle": "puzzle.png", "answer": "answer.png"}
@@ -84,7 +100,7 @@ async def main() -> None:
     cv2.setNumThreads(1)  # one job = one core; scale with replicas, not threads
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     worker = Worker(QUEUE, process, {
-        "connection": REDIS_URL,
+        "connection": redis_url(REDIS_URL),
         "prefix": PREFIX,
         "concurrency": CONCURRENCY,
         "lockDuration": 30000,
