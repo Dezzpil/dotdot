@@ -12,8 +12,10 @@ export async function createApp(cfg: AppConfig = loadConfig()): Promise<INestApp
   });
   app.set('trust proxy', cfg.trustProxy);
   app.disable('x-powered-by');
-  app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
-  if (cfg.corsOrigins.length) app.enableCors({ origin: cfg.corsOrigins });
+  // when the web app lives on another origin (CORS_ORIGINS set), its <img> must be able to load the sheets
+  app.use(helmet({ crossOriginResourcePolicy: { policy: cfg.corsOrigins.length ? 'cross-origin' : 'same-site' } }));
+  // '*' allows any origin (e.g. a preview host); otherwise an exact list
+  if (cfg.corsOrigins.length) app.enableCors({ origin: cfg.corsOrigins.includes('*') ? true : cfg.corsOrigins });
   app.setGlobalPrefix('api');
   app.useGlobalPipes(
     new ValidationPipe({

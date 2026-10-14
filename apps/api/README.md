@@ -32,7 +32,7 @@ Errors are always `{"error": {"code", "message", ...}}`; codes: `NO_FILE`, `FILE
 | `TRUST_PROXY` | 1 | proxies in front (Caddy = 1, Cloudflare + Caddy = 2) |
 | `RATE_CREATE_PER_MIN` / `_PER_HOUR` | 10 / 60 | per IP, shared across replicas |
 | `RATE_READ_PER_MIN` | 300 | |
-| `CORS_ORIGINS` | — | comma-separated; not needed behind one domain |
+| `CORS_ORIGINS` | — | comma-separated, or `*` for any origin; not needed behind one domain |
 | `DONATE_CLOUDTIPS_URL`, `DONATE_BOOSTY_URL`, `DONATE_KOFI_URL` | — | shown by the web app |
 
 ## Develop
