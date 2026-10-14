@@ -11,7 +11,10 @@ def main():
     ap.add_argument("input")
     ap.add_argument("out")
     for k, v in vars(Options()).items():
-        ap.add_argument(f"--{k}", type=type(v), default=v)
+        if isinstance(v, bool):
+            ap.add_argument(f"--{k}", action="store_true")
+        else:
+            ap.add_argument(f"--{k}", type=type(v), default=v)
     a = ap.parse_args()
     opts = Options(**{k: getattr(a, k) for k in vars(Options())})
     res = generate(pathlib.Path(a.input).read_bytes(), opts)

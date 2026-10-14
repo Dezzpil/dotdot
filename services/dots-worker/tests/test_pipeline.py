@@ -28,3 +28,20 @@ def test_levels_scale_dot_count():
 def test_rejects_garbage():
     with pytest.raises(BadImageError):
         generate(b"not an image", Options())
+
+
+@pytest.mark.parametrize("level", ["kid", "school", "adult"])
+@pytest.mark.parametrize("labels", ["numbers", "math"])
+def test_layout_quality(level, labels):
+    q = generate(SAMPLE.read_bytes(), Options(level=level, labels=labels, debug=True)).stats["quality"]
+    assert q["label_overlaps"] == 0
+    assert q["label_on_dot"] == 0
+    assert q["ambiguous"] <= 2
+    assert q["label_on_line"] == 0
+
+
+def test_fewer_pen_lifts():
+    data = SAMPLE.read_bytes()
+    strokes = {l: generate(data, Options(level=l)).stats["strokes"] for l in ("kid", "school", "adult")}
+    assert strokes["kid"] <= 10 and strokes["school"] <= 16 and strokes["adult"] <= 20
+    assert generate(data, Options(mode="outline")).stats["strokes"] == 1
