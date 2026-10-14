@@ -31,3 +31,19 @@ pytest -q
 ```
 
 ~0.5–1.4 s per image on one CPU core. `--debug` adds layout quality metrics (overlaps, ambiguous labels, pen lifts) to the stats.
+
+## Queue worker
+
+`python -m dotdot.worker` (the Docker entrypoint) consumes BullMQ jobs from Redis.
+
+| Var | Default | |
+|---|---|---|
+| `REDIS_URL` | redis://localhost:6379 | |
+| `QUEUE_NAME` / `QUEUE_PREFIX` | dots / dotdot | must match the API |
+| `STORAGE_DIR` | /data | shared volume |
+| `WORKER_CONCURRENCY` | 1 | keep 1; scale with container replicas |
+| `JOB_TIMEOUT_SEC` | 60 | |
+
+Job data `{id, input, options}` → result `{files: {pdf, puzzle, answer}, stats}`.
+Known failures are raised as non-retryable `CODE: message` (`BAD_IMAGE`, `BAD_OPTIONS`, `TIMEOUT`, `INPUT_MISSING`).
+Images above 40 megapixels are refused before decoding. SIGTERM finishes the current job, then exits.

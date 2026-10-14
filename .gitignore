@@ -3,3 +3,5 @@ dist/
 __pycache__/
 .venv/
 .env
+*.log
+.pytest_cache/

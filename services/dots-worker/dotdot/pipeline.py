@@ -37,6 +37,10 @@ def _close_almost_loops(strokes: list[Stroke], gap: float) -> list[Stroke]:
     return out
 
 
+class BadOptionsError(ValueError):
+    pass
+
+
 @dataclass
 class Options:
     mode: str = "auto"  # auto | all | outline; auto = outline for kids, all otherwise
@@ -48,15 +52,26 @@ class Options:
     debug: bool = False  # adds layout quality metrics to stats
 
     def validate(self) -> "Options":
-        assert self.mode in ("auto", "all", "outline")
-        assert self.level in LEVELS
+        allowed = {
+            "mode": ("auto", "all", "outline"),
+            "numbering": ("jumps", "series"),
+            "level": tuple(LEVELS),
+            "labels": ("numbers", "math"),
+            "lang": ("ru", "en"),
+        }
+        for k, vals in allowed.items():
+            if getattr(self, k) not in vals:
+                raise BadOptionsError(f"{k} must be one of {vals}")
+        if not isinstance(self.seed, int):
+            raise BadOptionsError("seed must be int")
         if self.mode == "auto":
             self.mode = DEFAULT_MODE[self.level]
-        assert self.numbering in ("jumps", "series")
-        assert self.level in LEVELS
-        assert self.labels in ("numbers", "math")
-        assert self.lang in ("ru", "en")
         return self
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Options":
+        known = set(cls.__dataclass_fields__)
+        return cls(**{k: v for k, v in (d or {}).items() if k in known and v is not None})
 
 
 @dataclass

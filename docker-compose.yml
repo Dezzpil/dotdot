@@ -1,0 +1,93 @@
+name: dotdot
+
+x-common-env: &common-env
+  REDIS_URL: redis://redis:6379
+  QUEUE_NAME: dots
+  QUEUE_PREFIX: dotdot
+  STORAGE_DIR: /data
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    # BullMQ needs noeviction; AOF keeps queued jobs across restarts
+    command: ["redis-server", "--appendonly", "yes", "--save", "", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: ./apps/api
+    environment:
+      <<: *common-env
+      PORT: "3000"
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
+      MAX_WAITING_JOBS: ${MAX_WAITING_JOBS:-300}
+      RESULT_TTL_SEC: ${RESULT_TTL_SEC:-86400}
+      RATE_CREATE_PER_MIN: ${RATE_CREATE_PER_MIN:-10}
+      RATE_CREATE_PER_HOUR: ${RATE_CREATE_PER_HOUR:-60}
+      RATE_READ_PER_MIN: ${RATE_READ_PER_MIN:-300}
+      DONATE_CLOUDTIPS_URL: ${DONATE_CLOUDTIPS_URL:-}
+      DONATE_BOOSTY_URL: ${DONATE_BOOSTY_URL:-}
+      DONATE_KOFI_URL: ${DONATE_KOFI_URL:-}
+    volumes:
+      - files:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    restart: unless-stopped
+
+  worker:
+    build: ./services/dots-worker
+    environment:
+      <<: *common-env
+      WORKER_CONCURRENCY: "1"
+      JOB_TIMEOUT_SEC: ${JOB_TIMEOUT_SEC:-60}
+    volumes:
+      - files:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    # CPU-bound: one job per container, one core each; scale with WORKER_REPLICAS
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+      resources:
+        limits:
+          cpus: "1"
+          memory: 768M
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      EMAIL: ${EMAIL:-admin@localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  files:
+  caddy-data:
+  caddy-config:

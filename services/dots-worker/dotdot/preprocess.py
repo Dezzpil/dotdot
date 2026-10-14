@@ -8,6 +8,7 @@ import numpy as np
 from skimage.morphology import remove_small_holes
 
 MAX_SIDE = 1600
+MAX_PIXELS = 40_000_000  # refuse decompression bombs before decoding
 
 
 class BadImageError(ValueError):
@@ -20,7 +21,22 @@ class Prepared:
     stroke_width: float  # estimated line thickness in px
 
 
+def _check_size(data: bytes) -> None:
+    from PIL import Image, UnidentifiedImageError
+    import io
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            w, h = im.size
+    except (UnidentifiedImageError, OSError) as e:
+        raise BadImageError("cannot decode image") from e
+    if w * h > MAX_PIXELS:
+        raise BadImageError(f"image too large: {w}x{h}")
+    if min(w, h) < 32:
+        raise BadImageError(f"image too small: {w}x{h}")
+
+
 def decode(data: bytes) -> np.ndarray:
+    _check_size(data)
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise BadImageError("cannot decode image")

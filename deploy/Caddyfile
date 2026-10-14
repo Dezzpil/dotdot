@@ -1,0 +1,38 @@
+{
+	# set EMAIL for Let's Encrypt notices; DOMAIN=localhost serves a self-signed cert
+	email {$EMAIL:admin@localhost}
+}
+
+{$DOMAIN:localhost} {
+	encode zstd gzip
+
+	# uploads are capped at 10 MB by the API too; this stops bigger bodies at the edge
+	request_body {
+		max_size 11MB
+	}
+
+	handle /api/* {
+		reverse_proxy {
+			# every API replica, re-resolved from Docker DNS: scale with API_REPLICAS
+			dynamic a api 3000 {
+				refresh 10s
+			}
+			lb_policy least_conn
+			lb_try_duration 5s
+			fail_duration 30s
+			# stream server-sent events immediately
+			flush_interval -1
+		}
+	}
+
+	# the web app (next step) will be served here
+	handle {
+		respond "DotDot is warming up its pencils." 200
+	}
+
+	header {
+		-Server
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Content-Type-Options nosniff
+	}
+}
