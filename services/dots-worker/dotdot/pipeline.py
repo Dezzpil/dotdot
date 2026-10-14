@@ -13,7 +13,7 @@ from .metrics import evaluate
 from .preprocess import prepare
 from .render import Layout, render_pdf, render_png
 from .skeleton import build_graph, merge_degree2, prune_spurs
-from .strokes import Stroke, chain_edges, order_strokes, outline_edge_ids
+from .strokes import Stroke, chain_edges, order_strokes, outline_edge_ids, start_at_top
 
 # level -> (contour tolerance pt, max dots, font pt, dot radius pt, min dot distance pt,
 #           max segment pt, strokes shorter than this (pt) are printed as lines)
@@ -22,6 +22,8 @@ LEVELS = {
     "school": (2.0, 150, 8.0, 2.0, 8.0, 45.0, 60.0),
     "adult": (1.0, 320, 6.5, 1.6, 5.5, 28.0, 30.0),
 }
+# kids get a single closed silhouette by default: no pen lifts, details are pre-printed
+DEFAULT_MODE = {"kid": "outline", "school": "all", "adult": "all"}
 # math examples are wider than numbers: level -> (dot cap factor, spacing factor)
 MATH_ROOM = {"kid": (1.0, 1.0), "school": (0.65, 1.15), "adult": (0.55, 1.25)}
 
@@ -37,7 +39,7 @@ def _close_almost_loops(strokes: list[Stroke], gap: float) -> list[Stroke]:
 
 @dataclass
 class Options:
-    mode: str = "all"  # all | outline
+    mode: str = "auto"  # auto | all | outline; auto = outline for kids, all otherwise
     numbering: str = "jumps"  # jumps | series
     level: str = "school"  # kid | school | adult
     labels: str = "numbers"  # numbers | math
@@ -46,7 +48,10 @@ class Options:
     debug: bool = False  # adds layout quality metrics to stats
 
     def validate(self) -> "Options":
-        assert self.mode in ("all", "outline")
+        assert self.mode in ("auto", "all", "outline")
+        assert self.level in LEVELS
+        if self.mode == "auto":
+            self.mode = DEFAULT_MODE[self.level]
         assert self.numbering in ("jumps", "series")
         assert self.level in LEVELS
         assert self.labels in ("numbers", "math")
@@ -99,7 +104,8 @@ def generate(data: bytes, opts: Options) -> Result:
         drop = {k for s in small for k in s.edge_ids}
         dot_ids = [k for k in dot_ids if k not in drop]
         line_ids += sorted(drop)
-    dotted = order_strokes(_close_almost_loops(dotted, dmin * px * 2.5))
+    dotted = _close_almost_loops(dotted, dmin * px * 2.5)
+    dotted = order_strokes(start_at_top(dotted, min_tail=dmin * px * 3), keep_first=True)
     lines = chain_edges(g, line_ids, look)
 
     to_page = lambda s: Stroke(L.to_page(s.pts), s.closed)  # noqa: E731

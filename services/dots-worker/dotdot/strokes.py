@@ -79,8 +79,12 @@ def _bridges(g: Graph, edges: dict[int, Edge], max_gap: float) -> dict[int, Edge
     return out
 
 
-def chain_edges(g: Graph, edge_ids: list[int], look: float, bridge: float = 0.0) -> list[Stroke]:
-    """Greedy Euler-like walk: continue through junctions along the straightest unused edge."""
+def chain_edges(g: Graph, edge_ids: list[int], look: float, bridge: float = 0.0,
+                start_top: bool = False) -> list[Stroke]:
+    """Greedy Euler-like walk: continue through junctions along the straightest unused edge.
+
+    With start_top the first walk begins at the odd node closest to the top of the drawing,
+    so dot 1 lands near the top and the first stroke is returned first."""
     edges = {k: g.edges[k] for k in edge_ids}
     if bridge > 0:
         edges.update(_bridges(g, edges, bridge))
@@ -102,8 +106,13 @@ def chain_edges(g: Graph, edge_ids: list[int], look: float, bridge: float = 0.0)
         cands = [n for n in inc if free(n)]
         odd = [n for n in cands if len(free(n)) % 2 == 1]
         pool = odd or cands
-        # long open chains first: start at the odd node whose free edges are the longest
-        start = max(pool, key=lambda n: sum(edges[k].length for k in free(n)))
+        if start_top and not strokes:
+            top = min((e.pts[int(np.argmin(e.pts[:, 1]))] for e in edges.values() if len(e.pts)),
+                      key=lambda p: p[1])
+            start = min(pool, key=lambda n: float(np.hypot(*(g.nodes[n] - top))))
+        else:
+            # long open chains first: start at the odd node whose free edges are the longest
+            start = max(pool, key=lambda n: sum(edges[k].length for k in free(n)))
         cur, heading, parts, ids = start, None, [], []
         while True:
             opts = list(dict.fromkeys(free(cur)))
@@ -134,17 +143,18 @@ def chain_edges(g: Graph, edge_ids: list[int], look: float, bridge: float = 0.0)
     return strokes
 
 
-def order_strokes(strokes: list[Stroke]) -> list[Stroke]:
-    """Nearest-neighbour ordering, starting from the top-most stroke."""
+def order_strokes(strokes: list[Stroke], keep_first: bool = False) -> list[Stroke]:
+    """Nearest-neighbour ordering. Dot 1 goes to the top: either the first stroke as walked
+    (keep_first) or the top-most stroke; closed loops are rotated to their top point."""
     if not strokes:
         return []
     rest = list(strokes)
-    first = min(rest, key=lambda s: s.pts[:, 1].min())
+    first = rest[0] if keep_first else min(rest, key=lambda s: s.pts[:, 1].min())
     rest.remove(first)
     if first.closed:
         i = int(np.argmin(first.pts[:, 1]))
         first = _rotate(first, i)
-    elif first.pts[-1, 1] < first.pts[0, 1]:
+    elif not keep_first and first.pts[-1, 1] < first.pts[0, 1]:
         first = Stroke(first.pts[::-1].copy(), False, first.edge_ids)
     out = [first]
     while rest:
@@ -164,6 +174,31 @@ def order_strokes(strokes: list[Stroke]) -> list[Stroke]:
         rest.remove(best)
         out.append(best_s)
     return out
+
+
+def start_at_top(strokes: list[Stroke], min_tail: float) -> list[Stroke]:
+    """Put dot 1 at the top of the drawing (where people expect it).
+
+    The stroke holding the top-most point goes first. A closed loop is rotated to that point;
+    an open stroke is split there into two branches that both start at the top (one extra
+    pen lift, but the start is obvious). Tiny tails are not worth a split: start at the end."""
+    if not strokes:
+        return strokes
+    si = min(range(len(strokes)), key=lambda i: strokes[i].pts[:, 1].min())
+    s = strokes[si]
+    rest = strokes[:si] + strokes[si + 1:]
+    i = int(np.argmin(s.pts[:, 1]))
+    if s.closed:
+        return [_rotate(s, i)] + rest
+    head, tail = s.pts[:i + 1][::-1], s.pts[i:]
+    seg = lambda p: float(np.hypot(*np.diff(p, axis=0).T).sum()) if len(p) > 1 else 0.0  # noqa: E731
+    if seg(head) < min_tail:
+        return [Stroke(tail.copy(), False, s.edge_ids)] + rest
+    if seg(tail) < min_tail:
+        return [Stroke(head.copy(), False, s.edge_ids)] + rest
+    # longer branch first, the other one is ordered like any other stroke
+    a, b = (head, tail) if seg(head) >= seg(tail) else (tail, head)
+    return [Stroke(a.copy(), False, s.edge_ids), Stroke(b.copy(), False, s.edge_ids)] + rest
 
 
 def _rotate(s: Stroke, i: int) -> Stroke:
