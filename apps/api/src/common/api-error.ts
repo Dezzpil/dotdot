@@ -7,6 +7,7 @@ export type ErrorCode =
   | 'UNSUPPORTED_TYPE'
   | 'BAD_OPTIONS'
   | 'BAD_IMAGE'
+  | 'BAD_PLAN'
   | 'BUSY'
   | 'RATE_LIMITED'
   | 'NOT_FOUND'

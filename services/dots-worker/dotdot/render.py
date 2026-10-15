@@ -55,6 +55,14 @@ class Layout:
         self.bounds = (self.margin - 10, self.margin + self.header - 18,
                        self.w - self.margin + 10, self.h - self.footer - 4)
 
+    @classmethod
+    def for_page(cls, w: float, h: float) -> "Layout":
+        """Same page geometry for an already laid-out (edited) plan."""
+        L = cls(int(w), int(h))
+        L.w, L.h = w, h
+        L.bounds = (L.margin - 10, L.margin + L.header - 18, w - L.margin + 10, h - L.footer - 4)
+        return L
+
     def to_page(self, pts: np.ndarray) -> np.ndarray:
         return pts * self.s + np.array([self.ox, self.oy])
 
@@ -191,6 +199,11 @@ def render_pdf(L: Layout, plan, placed, opts, font_size, dot_r) -> bytes:
 def render_png(L: Layout, plan, placed, opts, font_size, dot_r, page: str = "puzzle", zoom: float = 2.0) -> bytes:
     surf = cairo.ImageSurface(cairo.FORMAT_RGB24, int(L.w * zoom), int(L.h * zoom))
     ctx = cairo.Context(surf)
+    # grey anti-aliasing: subpixel (RGB) text gets colour fringes once the browser scales the preview
+    fo = cairo.FontOptions()
+    fo.set_antialias(cairo.ANTIALIAS_GRAY)
+    fo.set_hint_style(cairo.HINT_STYLE_SLIGHT)
+    ctx.set_font_options(fo)
     ctx.set_source_rgb(1, 1, 1)
     ctx.paint()
     ctx.scale(zoom, zoom)

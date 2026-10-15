@@ -9,12 +9,13 @@ NestJS 12 (ESM) + TypeScript, BullMQ 6 on Redis. Node.js ≥ 22.
 | POST | `/api/jobs` | multipart: `file` (PNG/JPEG/WebP/BMP/GIF, ≤ 10 MB) + optional `mode` (auto/all/outline), `numbering` (jumps/series), `level` (kid/school/adult), `labels` (numbers/math), `lang` (ru/en). → `202 JobView` |
 | GET | `/api/jobs/:id` | `JobView`: `status` queued/processing/done/failed, `position`, `progress`, `result`, `error` |
 | GET | `/api/jobs/:id/events` | SSE: `job` event with `JobView` on every change, `ping` every 15 s; closes on done/failed |
-| GET | `/api/jobs/:id/files/{dotdot.pdf,puzzle.png,answer.png}` | result files (`409 NOT_READY` until done) |
+| POST | `/api/jobs/:id/edit` | JSON `{dots: [[x,y]], paths: [[ids]], numbering?, labels?, lang?}` — the edited plan of a finished job (≤ 1500 dots, 500 paths). Lines and page come from the parent; no image analysis, the sheet is re-rendered in < 1 s. → `202 JobView` of a new job (`stats.edited = true`) |
+| GET | `/api/jobs/:id/files/{dotdot.pdf,puzzle.png,answer.png,plan.json,source}` | result files (`409 NOT_READY` until done). `plan.json` is the editable plan, `source` the uploaded image (editor underlay). JSON is served `no-cache` |
 | GET | `/api/config` | limits, option values, defaults, donate links — for the web app |
 | GET | `/api/health` | Redis, storage, queue counts (`503` if unhealthy) |
 
 Errors are always `{"error": {"code", "message", ...}}`; codes: `NO_FILE`, `FILE_TOO_LARGE`,
-`UNSUPPORTED_TYPE`, `BAD_OPTIONS`, `BAD_IMAGE`, `BUSY`, `RATE_LIMITED` (+ `Retry-After`),
+`UNSUPPORTED_TYPE`, `BAD_OPTIONS`, `BAD_IMAGE`, `BAD_PLAN` (edit: invalid or too big plan, or the parent has no plan), `BUSY`, `RATE_LIMITED` (+ `Retry-After`),
 `NOT_FOUND`, `NOT_READY`, `TIMEOUT`, `INTERNAL`. The web app maps codes to friendly RU/EN texts.
 
 ## Environment

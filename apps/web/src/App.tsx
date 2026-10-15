@@ -4,26 +4,36 @@ import { ApiFailure, createJob, FALLBACK_CONFIG, getConfig, JobOptions, PublicCo
 import { Dottie, Logo } from './components/Brand';
 import { donateLinks } from './components/Donate';
 import { JobScreen } from './components/JobScreen';
+import { EditorScreen } from './editor/Editor';
 import { Setup } from './components/Setup';
 import { Picked, Upload } from './components/Upload';
 import { errorText, useI18n } from './i18n';
 
 const REPO = 'https://github.com/Dezzpil/dotdot';
 
-/** "#/job/<id>" keeps a result reachable after reload and shareable by link. */
-function useJobHash(): [string | null, (id: string | null) => void] {
-  const read = () => /^#\/job\/([0-9a-f-]{36})$/.exec(window.location.hash)?.[1] ?? null;
-  const [id, setId] = useState(read);
+interface Route {
+  id: string | null;
+  edit: boolean;
+}
+
+/** "#/job/<id>" keeps a result reachable after reload and shareable by link; "/edit" opens the dot editor. */
+function useJobHash(): [Route, (id: string | null, edit?: boolean) => void] {
+  const read = (): Route => {
+    const m = /^#\/job\/([0-9a-f-]{36})(\/edit)?$/.exec(window.location.hash);
+    return { id: m?.[1] ?? null, edit: !!m?.[2] };
+  };
+  const [route, setRoute] = useState(read);
   useEffect(() => {
-    const on = () => setId(read());
+    const on = () => setRoute(read());
     window.addEventListener('hashchange', on);
     return () => window.removeEventListener('hashchange', on);
   }, []);
-  const go = useCallback((next: string | null) => {
-    window.location.hash = next ? `/job/${next}` : '';
-    setId(next);
+  const go = useCallback((next: string | null, edit = false) => {
+    window.location.hash = next ? `/job/${next}${edit ? '/edit' : ''}` : '';
+    setRoute({ id: next, edit: !!next && edit });
+    window.scrollTo?.({ top: 0 });
   }, []);
-  return [id, go];
+  return [route, go];
 }
 
 function useTheme() {
@@ -52,7 +62,8 @@ export function App() {
   const { t, lang, setLang } = useI18n();
   const [dark, toggleTheme] = useTheme();
   const [config, setConfig] = useState<PublicConfig>(FALLBACK_CONFIG);
-  const [jobId, goJob] = useJobHash();
+  const [route, goJob] = useJobHash();
+  const jobId = route.id;
   const [picked, setPicked] = useState<Picked | null>(null);
   const [options, setOptions] = useState<JobOptions>({ mode: 'auto', numbering: 'jumps', level: 'kid', labels: 'numbers', lang });
   const [busy, setBusy] = useState(false);
@@ -125,13 +136,16 @@ export function App() {
       </header>
 
       <main id="main" tabIndex={-1} className="main">
-        {jobId ? (
+        {jobId && route.edit ? (
+          <EditorScreen key={`${jobId}-edit`} id={jobId} config={config} onBack={() => goJob(jobId)} onSaved={(id) => goJob(id)} />
+        ) : jobId ? (
           <JobScreen
             key={jobId}
             id={jobId}
             config={config}
             onAgain={picked ? () => goJob(null) : undefined}
             onRetry={picked ? submit : undefined}
+            onEdit={() => goJob(jobId, true)}
             onNew={reset}
           />
         ) : picked ? (

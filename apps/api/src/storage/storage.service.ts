@@ -1,12 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { createReadStream } from 'node:fs';
-import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { APP_CONFIG, AppConfig } from '../config.js';
 
 /**
  * File storage on a volume shared with the workers (one VPS).
- * Layout: <root>/<jobId>/{input.ext, dotdot.pdf, puzzle.png, answer.png}.
+ * Layout: <root>/<jobId>/{input.ext, edit.json?, dotdot.pdf, puzzle.png, answer.png, plan.json}.
  * Keep this interface small so an S3 driver (Garage, SeaweedFS, cloud) can replace it later.
  */
 @Injectable()
@@ -31,6 +31,35 @@ export class StorageService {
     await writeFile(`${abs}.tmp`, data);
     await rename(`${abs}.tmp`, abs);
     return rel;
+  }
+
+  async save(jobId: string, name: string, data: Buffer | string): Promise<string> {
+    const rel = `${jobId}/${name}`;
+    const abs = this.resolve(rel);
+    await mkdir(path.dirname(abs), { recursive: true });
+    await writeFile(`${abs}.tmp`, data);
+    await rename(`${abs}.tmp`, abs);
+    return rel;
+  }
+
+  /** Copy a file into another job folder (each folder expires on its own). Returns null if gone. */
+  async copy(rel: string, jobId: string, name: string): Promise<string | null> {
+    const to = `${jobId}/${name}`;
+    try {
+      await mkdir(path.dirname(this.resolve(to)), { recursive: true });
+      await copyFile(this.resolve(rel), this.resolve(to));
+      return to;
+    } catch {
+      return null;
+    }
+  }
+
+  async read(rel: string): Promise<Buffer | null> {
+    try {
+      return await readFile(this.resolve(rel));
+    } catch {
+      return null;
+    }
   }
 
   async size(rel: string): Promise<number | null> {

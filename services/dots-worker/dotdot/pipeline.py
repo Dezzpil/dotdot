@@ -10,6 +10,7 @@ import numpy as np
 from .dots import assign_texts, build_plan
 from .labels import place_labels
 from .metrics import evaluate
+from .plan_io import parse_plan, plan_from_doc, plan_to_json
 from .preprocess import prepare
 from .render import Layout, render_pdf, render_png
 from .skeleton import build_graph, merge_degree2, prune_spurs
@@ -80,6 +81,7 @@ class Result:
     preview_puzzle: bytes
     preview_answer: bytes
     stats: dict
+    plan: bytes = b""  # plan.json for the web editor
 
 
 def generate(data: bytes, opts: Options) -> Result:
@@ -125,6 +127,28 @@ def generate(data: bytes, opts: Options) -> Result:
 
     to_page = lambda s: Stroke(L.to_page(s.pts), s.closed)  # noqa: E731
     plan = build_plan([to_page(s) for s in dotted], [to_page(s) for s in lines], eps0, cap, dmin, maxseg)
+    # where the uploaded file sits on the page (the editor shows it under the dots)
+    image = {"w": prep.orig_w, "h": prep.orig_h, "s": prep.scale * L.s,
+             "ox": L.ox - prep.x0 * L.s, "oy": L.oy - prep.y0 * L.s}
+    plan_json = plan_to_json(plan, L.w, L.h, image, dot_r)
+    extra = {"stroke_width_px": round(sw, 1), "graph_edges": len(g.edges)}
+    return _finish(L, plan, opts, font_size, dot_r, plan_json, extra, t0)
+
+
+def render_edited(plan_raw: bytes | str | dict, opts: Options) -> Result:
+    """Lay out labels and render a plan the user has edited: no image analysis at all."""
+    t0 = time.perf_counter()
+    opts.validate()
+    _, _, font_size, dot_r, _, _, _ = LEVELS[opts.level]
+    doc = parse_plan(plan_raw)
+    plan = plan_from_doc(doc)
+    L = Layout.for_page(doc.page_w, doc.page_h)
+    plan_json = plan_to_json(plan, doc.page_w, doc.page_h, doc.image, dot_r, simplify_lines=False)
+    return _finish(L, plan, opts, font_size, dot_r, plan_json, {"edited": True}, t0)
+
+
+def _finish(L: Layout, plan, opts: Options, font_size: float, dot_r: float, plan_json: bytes,
+            extra: dict, t0: float) -> Result:
     assign_texts(plan, opts.numbering, opts.labels, opts.level, opts.seed)
 
     scratch = cairo.Context(cairo.ImageSurface(cairo.FORMAT_A8, 4, 4))
@@ -140,11 +164,10 @@ def generate(data: bytes, opts: Options) -> Result:
         "numbers": len(plan.seq),
         "strokes": len(plan.paths),
         "plain_lines": len(plan.lines),
-        "stroke_width_px": round(sw, 1),
-        "graph_edges": len(g.edges),
+        **extra,
         "ms": round((time.perf_counter() - t0) * 1000),
         "options": asdict(opts),
     }
     if opts.debug:
         stats["quality"] = evaluate(plan, placed, dot_r)
-    return Result(pdf, prev_p, prev_a, stats)
+    return Result(pdf, prev_p, prev_a, stats, plan_json)

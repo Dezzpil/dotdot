@@ -15,7 +15,7 @@ describe('texts', () => {
   });
 
   it('has a friendly text for every API error code in both languages', () => {
-    const codes = ['NO_FILE', 'FILE_TOO_LARGE', 'UNSUPPORTED_TYPE', 'BAD_OPTIONS', 'BAD_IMAGE', 'BUSY', 'RATE_LIMITED', 'NOT_FOUND', 'NOT_READY', 'TIMEOUT', 'NETWORK', 'INTERNAL', 'SOMETHING_NEW'];
+    const codes = ['NO_FILE', 'FILE_TOO_LARGE', 'UNSUPPORTED_TYPE', 'BAD_OPTIONS', 'BAD_IMAGE', 'BAD_PLAN', 'BUSY', 'RATE_LIMITED', 'NOT_FOUND', 'NOT_READY', 'TIMEOUT', 'NETWORK', 'INTERNAL', 'SOMETHING_NEW'];
     for (const t of Object.values(DICTS)) {
       for (const c of codes) {
         const s = errorText(t, c, { maxUploadMb: 10, retryAfterSec: 30 });

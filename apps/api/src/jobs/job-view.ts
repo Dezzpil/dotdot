@@ -12,6 +12,10 @@ export interface JobView {
     pdf: string;
     puzzle: string;
     answer: string;
+    /** structure for the dot editor; missing for jobs made before the editor existed */
+    plan?: string;
+    /** the uploaded drawing, shown under the dots in the editor */
+    source?: string;
     stats: Record<string, unknown>;
   };
   error?: { code: ErrorCode; message: string };
@@ -19,7 +23,7 @@ export interface JobView {
   finishedAt?: number;
 }
 
-const KNOWN: ErrorCode[] = ['BAD_IMAGE', 'BAD_OPTIONS', 'TIMEOUT', 'NOT_FOUND'];
+const KNOWN: ErrorCode[] = ['BAD_IMAGE', 'BAD_OPTIONS', 'BAD_PLAN', 'TIMEOUT', 'NOT_FOUND'];
 
 /** Worker failures look like "CODE: message"; anything else is an internal error. */
 export function parseFailure(reason: string | undefined): { code: ErrorCode; message: string } {

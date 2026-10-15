@@ -16,6 +16,7 @@ import type { Response } from 'express';
 import { Observable, concatMap, defer, interval, merge, of, takeWhile, throttleTime } from 'rxjs';
 import { RateLimit } from '../common/rate-limit.js';
 import { CreateJobDto } from './create-job.dto.js';
+import { EditJobDto } from './edit-plan.js';
 import { JobEventsService } from './job-events.service.js';
 import { JobView } from './job-view.js';
 import { JobsService } from './jobs.service.js';
@@ -36,6 +37,14 @@ export class JobsController {
   @UseInterceptors(FileInterceptor('file'))
   create(@UploadedFile() file: Express.Multer.File | undefined, @Body() dto: CreateJobDto): Promise<JobView> {
     return this.jobs.create(file, dto);
+  }
+
+  /** A new version of a finished drawing with the user's dots. JSON: {dots, paths, numbering?, labels?, lang?}. */
+  @Post(':id/edit')
+  @HttpCode(202)
+  @RateLimit('create')
+  edit(@Param('id') id: string, @Body() dto: EditJobDto): Promise<JobView> {
+    return this.jobs.edit(id, dto);
   }
 
   @Get(':id')
@@ -79,6 +88,7 @@ export class JobsController {
     res.setHeader('Content-Length', String(f.size));
     res.setHeader('Cache-Control', 'private, max-age=86400, immutable');
     if (name.endsWith('.pdf')) res.setHeader('Content-Disposition', 'attachment; filename="dotdot.pdf"');
+    if (name.endsWith('.json')) res.setHeader('Cache-Control', 'private, no-cache');
     f.stream.on('error', () => res.destroy());
     f.stream.pipe(res);
   }

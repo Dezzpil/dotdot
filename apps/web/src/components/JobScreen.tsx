@@ -1,4 +1,4 @@
-import { Download, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { Download, PencilLine, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { ApiFailure, apiUrl, JobView, PublicConfig, watchJob } from '../api';
 import { errorText, useI18n } from '../i18n';
@@ -41,7 +41,19 @@ function Waiting({ view }: { view: JobView | null }) {
   );
 }
 
-function Done({ view, config, onAgain, onNew }: { view: JobView; config: PublicConfig; onAgain?: () => void; onNew: () => void }) {
+function Done({
+  view,
+  config,
+  onAgain,
+  onEdit,
+  onNew,
+}: {
+  view: JobView;
+  config: PublicConfig;
+  onAgain?: () => void;
+  onEdit?: () => void;
+  onNew: () => void;
+}) {
   const { t } = useI18n();
   const [tab, setTab] = useState<'puzzle' | 'answer'>('puzzle');
   const r = view.result!;
@@ -84,6 +96,11 @@ function Done({ view, config, onAgain, onNew }: { view: JobView; config: PublicC
             <p className="lead" data-testid="text-done">
               {t.doneLead(dots)}
             </p>
+            {r.stats.edited && (
+              <span className="edited-note" data-testid="text-edited">
+                <PencilLine size={13} aria-hidden="true" /> {t.editedNote}
+              </span>
+            )}
           </div>
         </div>
         <dl className="stats">
@@ -102,6 +119,11 @@ function Done({ view, config, onAgain, onNew }: { view: JobView; config: PublicC
         </a>
         <p className="muted small center">{t.downloadHint}</p>
         <div className="row">
+          {onEdit && r.plan && (
+            <button type="button" className="btn-ghost" onClick={onEdit} data-testid="button-edit">
+              <PencilLine size={16} aria-hidden="true" /> {t.edit}
+            </button>
+          )}
           {onAgain && (
             <button type="button" className="btn-ghost" onClick={onAgain} data-testid="button-again">
               <SlidersHorizontal size={16} aria-hidden="true" /> {t.again}
@@ -140,10 +162,17 @@ function Failed({ code, config, onRetry, onNew }: { code: string; config: Public
   );
 }
 
-export function JobScreen(props: { id: string; config: PublicConfig; onAgain?: () => void; onRetry?: () => void; onNew: () => void }) {
+export function JobScreen(props: {
+  id: string;
+  config: PublicConfig;
+  onAgain?: () => void;
+  onRetry?: () => void;
+  onEdit?: () => void;
+  onNew: () => void;
+}) {
   const { view, failure } = useJob(props.id);
   if (failure) return <Failed code={failure.code} config={props.config} onNew={props.onNew} />;
   if (view?.status === 'failed') return <Failed code={view.error?.code ?? 'INTERNAL'} config={props.config} onRetry={props.onRetry} onNew={props.onNew} />;
-  if (view?.status === 'done' && view.result) return <Done view={view} config={props.config} onAgain={props.onAgain} onNew={props.onNew} />;
+  if (view?.status === 'done' && view.result) return <Done view={view} config={props.config} onAgain={props.onAgain} onEdit={props.onEdit} onNew={props.onNew} />;
   return <Waiting view={view} />;
 }

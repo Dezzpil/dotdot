@@ -44,6 +44,7 @@ pytest -q
 | `WORKER_CONCURRENCY` | 1 | keep 1; scale with container replicas |
 | `JOB_TIMEOUT_SEC` | 60 | |
 
-Job data `{id, input, options}` → result `{files: {pdf, puzzle, answer}, stats}`.
+Job data `{id, input, options}` → result `{files: {pdf, puzzle, answer, plan}, stats}`.
+Edit jobs `{kind: "edit", id, input: "<id>/edit.json", options}` skip image analysis: the plan (format in `dotdot/plan_io.py`) is validated (`BAD_PLAN`) and rendered again.
 Known failures are raised as non-retryable `CODE: message` (`BAD_IMAGE`, `BAD_OPTIONS`, `TIMEOUT`, `INPUT_MISSING`).
 Images above 40 megapixels are refused before decoding. SIGTERM finishes the current job, then exits.

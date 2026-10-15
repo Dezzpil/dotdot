@@ -1,3 +1,5 @@
+import type { Draft, PlanDoc } from './editor/model';
+
 export type Mode = 'auto' | 'all' | 'outline';
 export type Numbering = 'jumps' | 'series';
 export type Level = 'kid' | 'school' | 'adult';
@@ -23,7 +25,18 @@ export interface JobView {
     pdf: string;
     puzzle: string;
     answer: string;
-    stats: { dots?: number; strokes?: number; plain_lines?: number; ms?: number; options?: Partial<JobOptions> };
+    /** plan.json for the dot editor (missing for sheets made before the editor) */
+    plan?: string;
+    /** the uploaded drawing, shown faintly under the dots while editing */
+    source?: string;
+    stats: {
+      dots?: number;
+      strokes?: number;
+      plain_lines?: number;
+      ms?: number;
+      edited?: boolean;
+      options?: Partial<JobOptions>;
+    };
   };
   error?: { code: string; message: string };
   createdAt: number;
@@ -78,6 +91,17 @@ export function createJob(file: Blob, options: JobOptions, filename = 'drawing.p
   form.append('file', file, filename);
   for (const [k, v] of Object.entries(options)) form.append(k, v);
   return request<JobView>('/api/jobs', { method: 'POST', body: form });
+}
+
+export const getPlan = (path: string) => request<PlanDoc>(path);
+
+/** A new sheet from edited dots; page geometry and plain lines stay on the server. */
+export function editJob(id: string, draft: Draft) {
+  return request<JobView>(`/api/jobs/${encodeURIComponent(id)}/edit`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ dots: draft.dots, paths: draft.paths }),
+  });
 }
 
 export const getJob = (id: string) => request<JobView>(`/api/jobs/${encodeURIComponent(id)}`);

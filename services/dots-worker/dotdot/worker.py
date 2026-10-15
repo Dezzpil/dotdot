@@ -1,9 +1,11 @@
 """BullMQ consumer: python -m dotdot.worker
 
 Job data (written by the API):
-    {"id": "<job id>", "input": "<id>/input.png", "options": {...}}
+    {"id": "<job id>", "input": "<id>/input.png", "options": {...}}                     # new drawing
+    {"id": "<job id>", "kind": "edit", "input": "<id>/edit.json", "options": {...}}     # edited dots
 Return value (read by the API):
-    {"files": {"pdf": "<id>/dotdot.pdf", "puzzle": "<id>/puzzle.png", "answer": "<id>/answer.png"},
+    {"files": {"pdf": "<id>/dotdot.pdf", "puzzle": "<id>/puzzle.png", "answer": "<id>/answer.png",
+               "plan": "<id>/plan.json"},
      "stats": {...}}
 Errors are raised as "CODE: message" so the API can show a friendly text.
 """
@@ -20,7 +22,8 @@ import time
 import cv2
 from bullmq import UnrecoverableError, Worker
 
-from .pipeline import BadOptionsError, Options, generate
+from .pipeline import BadOptionsError, Options, generate, render_edited
+from .plan_io import BadPlanError
 from .preprocess import BadImageError
 
 log = logging.getLogger("dotdot.worker")
@@ -74,10 +77,13 @@ async def process(job, token):
     await job.updateProgress(10)
     log.debug("job %s: progress 10 saved", job_id)
     raw = await asyncio.to_thread(src.read_bytes)
+    run = render_edited if data.get("kind") == "edit" else generate
     try:
-        res = await asyncio.wait_for(asyncio.to_thread(generate, raw, opts), JOB_TIMEOUT)
+        res = await asyncio.wait_for(asyncio.to_thread(run, raw, opts), JOB_TIMEOUT)
     except BadImageError as e:
         raise UnrecoverableError(f"BAD_IMAGE: {e}")
+    except BadPlanError as e:
+        raise UnrecoverableError(f"BAD_PLAN: {e}")
     except asyncio.TimeoutError:
         raise UnrecoverableError("TIMEOUT: drawing is too complex")
     log.debug("job %s: generated", job_id)
@@ -85,8 +91,8 @@ async def process(job, token):
     log.debug("job %s: progress 90 saved", job_id)
     out = _safe_path(job_id)
     out.mkdir(parents=True, exist_ok=True)
-    files = {"pdf": "dotdot.pdf", "puzzle": "puzzle.png", "answer": "answer.png"}
-    blobs = {"pdf": res.pdf, "puzzle": res.preview_puzzle, "answer": res.preview_answer}
+    files = {"pdf": "dotdot.pdf", "puzzle": "puzzle.png", "answer": "answer.png", "plan": "plan.json"}
+    blobs = {"pdf": res.pdf, "puzzle": res.preview_puzzle, "answer": res.preview_answer, "plan": res.plan}
     for k, name in files.items():
         await asyncio.to_thread(_write, out / name, blobs[k])
     await job.updateProgress(100)

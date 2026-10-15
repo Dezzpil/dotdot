@@ -19,6 +19,12 @@ class BadImageError(ValueError):
 class Prepared:
     ink: np.ndarray  # bool mask, True = line pixel
     stroke_width: float  # estimated line thickness in px
+    # how ink pixels relate to the uploaded file: ink = original * scale - (x0, y0)
+    scale: float = 1.0
+    x0: int = 0
+    y0: int = 0
+    orig_w: int = 0
+    orig_h: int = 0
 
 
 def _check_size(data: bytes) -> None:
@@ -36,6 +42,11 @@ def _check_size(data: bytes) -> None:
 
 
 def decode(data: bytes) -> np.ndarray:
+    return decode_scaled(data)[0]
+
+
+def decode_scaled(data: bytes) -> tuple[np.ndarray, float, int, int]:
+    """Grayscale image (at most MAX_SIDE), resize factor, original width and height."""
     _check_size(data)
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
     if img is None:
@@ -53,7 +64,9 @@ def decode(data: bytes) -> np.ndarray:
     k = MAX_SIDE / max(h, w)
     if k < 1:
         gray = cv2.resize(gray, (round(w * k), round(h * k)), interpolation=cv2.INTER_AREA)
-    return gray
+    else:
+        k = 1.0
+    return gray, k, w, h
 
 
 def binarize(gray: np.ndarray) -> np.ndarray:
@@ -91,7 +104,7 @@ def _remove_frame_and_watermark(ink: np.ndarray) -> np.ndarray:
 
 
 def prepare(data: bytes) -> Prepared:
-    gray = decode(data)
+    gray, k, ow, oh = decode_scaled(data)
     ink = binarize(gray)
     ink = _remove_frame_and_watermark(ink)
     if ink.sum() < 50:
@@ -106,4 +119,4 @@ def prepare(data: bytes) -> Prepared:
     dist = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, 5)
     sw = float(np.percentile(dist[ink], 90) * 2) if ink.any() else 2.0
     ink = remove_small_holes(ink, max_size=max(16, int(sw * sw * 0.8)))
-    return Prepared(ink=ink, stroke_width=max(sw, 1.0))
+    return Prepared(ink=ink, stroke_width=max(sw, 1.0), scale=k, x0=int(x0), y0=int(y0), orig_w=ow, orig_h=oh)

@@ -189,4 +189,53 @@ describe('DotDot API', () => {
       await busy.app.close();
     }
   });
+
+  it('edits dots: plan.json -> POST edit -> a new sheet from the same drawing', async () => {
+    const up = await upload(s.base, sample, { level: 'school', lang: 'ru' });
+    const done = (await events(s.base, up.body.id)).at(-1);
+    expect(done.status).toBe('done');
+    expect(done.result.plan).toBe(`/api/jobs/${up.body.id}/files/plan.json`);
+    const src = await fetch(`${s.base}${done.result.source}`);
+    expect(src.headers.get('content-type')).toBe('image/png');
+    const plan = (await (await fetch(`${s.base}${done.result.plan}`)).json()) as any;
+    expect(plan.dots.length).toBe(done.result.stats.dots);
+
+    // move one dot, drop the last line, switch the sheet to English
+    plan.dots[0][0] += 10;
+    const paths = plan.paths.slice(0, -1);
+    const post = (body: unknown) =>
+      fetch(`${s.base}/api/jobs/${up.body.id}/edit`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': ip() },
+        body: JSON.stringify(body),
+      });
+    const r = await post({ dots: plan.dots, paths, lang: 'en' });
+    expect(r.status).toBe(202);
+    const job = (await r.json()) as any;
+    expect(job.id).not.toBe(up.body.id);
+    const edited = (await events(s.base, job.id)).at(-1);
+    expect(edited.status).toBe('done');
+    expect(edited.result.stats.edited).toBe(true);
+    expect(edited.result.stats.strokes).toBe(paths.length);
+    expect(edited.result.stats.options).toMatchObject({ level: 'school', lang: 'en' });
+    expect(edited.result.source).toBeDefined(); // the drawing travels with every version
+    expect((await fetch(`${s.base}${edited.result.source}`)).status).toBe(200);
+    const again = (await (await fetch(`${s.base}${edited.result.plan}`)).json()) as any;
+    expect(again.lines).toEqual(plan.lines); // plain lines come from the parent, not from the client
+
+    // broken edits are refused before they reach the queue
+    let bad = await post({ dots: [[1e6, 0]], paths: [[0, 0]] });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as any).error.code).toBe('BAD_PLAN');
+    bad = await post({ dots: plan.dots, paths: [[0, 99999]] });
+    expect(((await bad.json()) as any).error.code).toBe('BAD_PLAN');
+    bad = await post({ dots: plan.dots, paths, lines: [] });
+    expect(bad.status).toBe(400); // unknown fields are rejected
+    bad = await fetch(`${s.base}/api/jobs/${randomUUID()}/edit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ dots: [], paths: [] }),
+    });
+    expect(bad.status).toBe(404);
+  });
 });

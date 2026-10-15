@@ -3,7 +3,7 @@
 Turn line drawings into printable connect-the-dots puzzles.
 Превращает чёрно-белые контурные рисунки в «рисунки по точкам» для печати.
 
-> Status: MVP is complete — algorithm, API, queue and web UI (RU/EN, light/dark). Donate links are set in `.env`. See [docs/decisions.md](docs/decisions.md).
+> Status: MVP is complete — algorithm, API, queue, web UI (RU/EN, light/dark) and a dot editor (move / add / remove dots, then rebuild the sheet). Donate links are set in `.env`. See [docs/decisions.md](docs/decisions.md).
 
 ## Architecture
 
@@ -228,9 +228,9 @@ cd apps/web && npm ci && npm run dev
 
 | Part | Command | Count |
 |---|---|---|
-| worker | `cd services/dots-worker && python -m pytest` | 56 |
-| API | `cd apps/api && npm test`, `TEST_REDIS_URL=redis://localhost:6379 npm run test:e2e` | 7 + 6 |
-| web | `cd apps/web && npm test` | 11 |
+| worker | `cd services/dots-worker && python -m pytest` | 68 |
+| API | `cd apps/api && npm test`, `TEST_REDIS_URL=redis://localhost:6379 npm run test:e2e` | 9 + 7 |
+| web | `cd apps/web && npm test` | 22 |
 
 ## Layout
 
