@@ -1160,6 +1160,20 @@ fieldset {
   stroke-width: 2px;
   vector-effect: non-scaling-stroke;
 }
+.ed-pick {
+  fill: none;
+  stroke: oklch(0.62 0.17 45);
+  stroke-width: 2px;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.ed-svg.tool-cut,
+.ed-svg.tool-cut .ed-hit {
+  cursor: crosshair;
+}
+.ed-svg.tool-merge .ed-hit {
+  cursor: pointer;
+}
 .is-sel .ed-dot {
   fill: oklch(0.55 0.17 42);
 }
@@ -1240,10 +1254,19 @@ fieldset {
   .ed-tools {
     width: 100%;
   }
+  .ed-tools {
+    border-radius: var(--radius-lg);
+  }
   .ed-tools button {
-    flex: 1;
+    flex: 1 1 0;
+    min-width: 0;
+    flex-direction: column;
     justify-content: center;
-    padding: 0 var(--space-2);
+    gap: 2px;
+    min-height: 52px;
+    padding: 4px 2px;
+    border-radius: var(--radius-md);
+    font-size: var(--text-xs);
   }
   .chip {
     padding: 0 var(--space-2);

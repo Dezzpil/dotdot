@@ -53,6 +53,110 @@ export function insertDot(d: Draft, path: number, seg: number, at: Pt): Draft {
   return { dots, paths };
 }
 
+/** Drop repeated neighbours; a "loop" of fewer than 3 distinct dots is just a there-and-back line. */
+function tidy(p: number[]): number[] | null {
+  const out = p.filter((k, j) => j === 0 || p[j - 1] !== k);
+  if (out.length >= 3 && out[0] === out[out.length - 1] && new Set(out).size < 3) out.pop();
+  return out.length >= 2 ? out : null;
+}
+
+/** Remove dots that no line uses any more and renumber the rest. */
+export function compact(d: Draft): Draft {
+  const used = new Set(d.paths.flat());
+  if (used.size === d.dots.length) return d;
+  const map = new Map<number, number>();
+  const dots: Pt[] = [];
+  d.dots.forEach((p, i) => {
+    if (used.has(i)) {
+      map.set(i, dots.length);
+      dots.push(p);
+    }
+  });
+  return { dots, paths: d.paths.map((p) => p.map((k) => map.get(k)!)) };
+}
+
+const isEnd = (p: number[], i: number) => !isClosed(p) && (p[0] === i || p[p.length - 1] === i);
+
+export type MergeKind = 'joined' | 'closed' | 'merged';
+
+/**
+ * Merge dot `a` into dot `b` (b keeps its place). When they are ends of two different
+ * open lines, the lines become one; ends of the same open line close it into a loop.
+ */
+export function mergeDots(d: Draft, a: number, b: number): { draft: Draft; kind: MergeKind } {
+  if (a === b) return { draft: d, kind: 'merged' };
+  let paths = d.paths.map((p) => p.slice());
+  let kind: MergeKind = 'merged';
+  const pa = paths.findIndex((p) => isEnd(p, a));
+  const pb = paths.findIndex((p, k) => k !== pa && isEnd(p, b));
+  if (pa >= 0 && pb >= 0) {
+    // a must end its line, b must start the other one: P … a + b … Q
+    const P = paths[pa][paths[pa].length - 1] === a ? paths[pa] : paths[pa].slice().reverse();
+    const Q = paths[pb][0] === b ? paths[pb] : paths[pb].slice().reverse();
+    const joined = [...P.slice(0, -1), ...Q];
+    const first = Math.min(pa, pb);
+    paths = paths.filter((_, k) => k !== pa && k !== pb);
+    paths.splice(first, 0, joined);
+    kind = 'joined';
+  } else {
+    const same = paths.findIndex((p) => isEnd(p, a) && isEnd(p, b));
+    if (same >= 0 && paths[same].length >= 3) kind = 'closed';
+  }
+  const next = paths
+    .map((p) => tidy(p.map((k) => (k === a ? b : k))))
+    .filter((p): p is number[] => p !== null)
+    .map((p) => p.map((k) => (k > a ? k - 1 : k)));
+  const dots = d.dots.filter((_, k) => k !== a);
+  return { draft: compact({ dots, paths: next }), kind };
+}
+
+/** How many times a line passes through dot `i` (a loop's closing repeat does not count). */
+export function visits(d: Draft, i: number): number {
+  let n = 0;
+  for (const p of d.paths) {
+    const core = isClosed(p) ? p.slice(0, -1) : p;
+    n += core.filter((k) => k === i).length;
+  }
+  return n;
+}
+
+/** Undo a merge: every extra visit of dot `i` gets its own dot, shifted a little so both are visible. */
+export function unmergeDot(d: Draft, i: number, page: { w: number; h: number }, step = 6): Draft {
+  if (visits(d, i) < 2) return d;
+  const dots = d.dots.slice();
+  let seen = 0;
+  const paths = d.paths.map((p) => {
+    const closed = isClosed(p);
+    const out = p.slice();
+    for (let j = 0; j < (closed ? p.length - 1 : p.length); j++) {
+      if (p[j] !== i) continue;
+      seen += 1;
+      if (seen === 1) continue;
+      const [x, y] = d.dots[i];
+      const r = step * (seen - 1);
+      dots.push(clampToPage([x + r, y + r], page));
+      out[j] = dots.length - 1;
+      if (closed && j === 0) out[p.length - 1] = dots.length - 1;
+    }
+    return out;
+  });
+  return { dots, paths };
+}
+
+/**
+ * Cut line `path` between its `seg`-th and next dot. An open line splits in two (the second
+ * part follows right after the first and starts with a ring); a loop opens at the cut.
+ * A dot left alone at an end disappears.
+ */
+export function cutSegment(d: Draft, path: number, seg: number): Draft {
+  const p = d.paths[path];
+  if (!p || seg < 0 || seg + 1 >= p.length) return d;
+  const parts = isClosed(p) ? [[...p.slice(seg + 1), ...p.slice(1, seg + 1)]] : [p.slice(0, seg + 1), p.slice(seg + 1)];
+  const keep = parts.map(tidy).filter((q): q is number[] => q !== null);
+  const paths = [...d.paths.slice(0, path), ...keep, ...d.paths.slice(path + 1)];
+  return compact({ dots: d.dots, paths });
+}
+
 /**
  * Make dot `i` number 1: its line goes first; a loop rotates to start there,
  * an open line flips when `i` is its last dot. A dot in the middle of an open line cannot start it.
@@ -122,7 +226,7 @@ export function nearestDot(d: Draft, at: Pt, maxDist: number): number | null {
 }
 
 /** Closest point on any segment of any line, within maxDist. */
-export function nearestSegment(d: Draft, at: Pt, maxDist: number): { path: number; seg: number; point: Pt } | null {
+export function nearestSegment(d: Draft, at: Pt, maxDist: number, margin = 0.08): { path: number; seg: number; point: Pt } | null {
   let best: { path: number; seg: number; point: Pt } | null = null;
   let bd = maxDist;
   d.paths.forEach((p, pi) => {
@@ -136,7 +240,7 @@ export function nearestSegment(d: Draft, at: Pt, maxDist: number): { path: numbe
       const q: Pt = [ax + dx * t, ay + dy * t];
       const dist = Math.hypot(q[0] - at[0], q[1] - at[1]);
       // stay off the end dots: inserting on top of an existing dot helps nobody
-      if (dist <= bd && t > 0.08 && t < 0.92) {
+      if (dist <= bd && t > margin && t < 1 - margin) {
         bd = dist;
         best = { path: pi, seg: j, point: q };
       }

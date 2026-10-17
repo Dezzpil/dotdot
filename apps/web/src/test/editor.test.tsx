@@ -123,6 +123,39 @@ describe('dot editor', () => {
     expect(await screen.findByTestId('text-edited')).toBeTruthy();
   });
 
+  it('cuts a line and merges the ends back', async () => {
+    const user = userEvent.setup();
+    render(
+      <I18nProvider initial="ru">
+        <App />
+      </I18nProvider>,
+    );
+    await user.click(await screen.findByTestId('button-edit'));
+    const canvas = await screen.findByTestId('editor-canvas');
+    // the square loop 1-2-3-4-1: cut the left edge (4-1), it becomes the open line 1-2-3-4
+    await user.click(screen.getByTestId('tool-cut'));
+    pointer(canvas, 'pointerDown', 100, 200); // middle of the left edge
+    expect(screen.getByTestId('text-editor-hint').textContent).toContain('Разрезали');
+    pointer(canvas, 'pointerDown', 100, 100);
+    expect(screen.getByTestId('text-editor-hint').textContent).toContain('а не на саму точку');
+    // merge the two ends again: the line closes
+    await user.click(screen.getByTestId('tool-merge'));
+    pointer(canvas, 'pointerDown', 100, 300);
+    expect(screen.getByTestId('dot-picked')).toBeTruthy();
+    pointer(canvas, 'pointerDown', 100, 100);
+    expect(screen.getByTestId('text-editor-hint').textContent).toContain('линия замкнулась');
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('text-editor-stats').textContent).toBe('3 точки · 1 линия');
+    await user.click(screen.getByTestId('button-save'));
+    await waitFor(() => expect(edited).not.toBeNull());
+    expect(edited.paths).toEqual([[0, 1, 2, 0]]);
+    expect(edited.dots).toEqual([
+      [100, 100],
+      [300, 100],
+      [300, 300],
+    ]);
+  });
+
   it('explains when an old sheet cannot be edited', async () => {
     (globalThis.fetch as any).mockImplementation(async (input: unknown) => {
       const url = String(input);

@@ -94,3 +94,20 @@ def test_image_mapping_puts_the_drawing_under_the_dots():
         u, v = int((x - im["ox"]) / im["s"]), int((y - im["oy"]) / im["s"])
         hits += bool(0 <= v < ink.shape[0] and 0 <= u < ink.shape[1] and ink[v, u])
     assert hits / len(p["dots"]) > 0.95
+
+
+def test_merged_dot_and_cut_line_render():
+    """Editor merge: one dot on two lines gets two numbers; cut: a line split in two."""
+    plan = {
+        "v": 1, "page": {"w": 595, "h": 842}, "image": {"w": 100, "h": 100, "s": 1, "ox": 0, "oy": 0}, "dotR": 2.2,
+        "dots": [[100, 300], [200, 300], [300, 300], [200, 200], [200, 400], [400, 300], [500, 300]],
+        # line 1 crosses line 2 at dot 1 (merged), line 3 is the cut-off rest of line 1
+        "paths": [[0, 1, 2], [3, 1, 4], [5, 6]],
+        "lines": [],
+    }
+    res = render_edited(json.dumps(plan), Options(level="school", numbering="jumps"))
+    out = json.loads(res.plan)
+    assert out["paths"] == plan["paths"]
+    assert res.stats["dots"] == 7
+    assert res.stats["strokes"] == 3
+    assert res.pdf[:4] == b"%PDF"

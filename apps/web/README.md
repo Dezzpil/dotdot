@@ -8,7 +8,7 @@ Vite + React 19 + TypeScript. One small single-page app, no UI framework, no tra
 2. **Setup** — preview, three levels (kid / school / adult), "fine tuning": what becomes dots, numbering, labels, sheet language.
 3. **Waiting** — place in queue, progress, a star that draws itself, little facts.
 4. **Done** — puzzle / answer tabs (tap to open full size), dots and lines count, PDF download, "another level" with the same picture, donate card.
-5. **Editor** (`#/job/<id>/edit`) — tools Move / Add (tap on a line) / Remove, undo-redo (Ctrl+Z, Ctrl+Shift+Z), arrows nudge, Delete removes, "make it first" for line ends and closed loops, zoom 100–400 % with pan, the original drawing as an underlay, numbers on/off, "as it was", "build the sheet" → a new job marked "your edited version". Touch drag works; on phones dense sheets start without numbers.
+5. **Editor** (`#/job/<id>/edit`) — tools Move / Add (tap on a line) / Remove / Merge (tap two dots: ends of two lines join into one, ends of one line close it, other dots become one dot with two numbers — "split apart" undoes that) / Cut (tap a segment: the line breaks there, the rest becomes a new line with a ring; a loop opens), undo-redo (Ctrl+Z, Ctrl+Shift+Z), arrows nudge, Delete removes, "make it first" for line ends and closed loops, zoom 100–400 % with pan, the original drawing as an underlay, numbers on/off, "as it was", "build the sheet" → a new job marked "your edited version". Touch drag works; on phones dense sheets start without numbers.
 6. **Oops** — a friendly text for every API error code, a way back.
 
 The job lives in the URL (`#/job/<id>`), so a reload or a shared link reopens it for 24 h.

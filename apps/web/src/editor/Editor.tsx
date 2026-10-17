@@ -1,4 +1,4 @@
-import { ArrowLeft, Eraser, Flag, Hand, Minus, Plus, Redo2, RotateCcw, Trash2, Undo2 } from 'lucide-react';
+import { ArrowLeft, Combine, Eraser, Flag, Hand, Minus, Plus, Redo2, RotateCcw, Scissors, Split, Trash2, Undo2 } from 'lucide-react';
 import { PointerEvent as ReactPointerEvent, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ApiFailure, apiUrl, editJob, getJob, getPlan, JobView, Numbering, PublicConfig } from '../api';
 import { Dottie } from '../components/Brand';
@@ -6,11 +6,13 @@ import { errorText, useI18n } from '../i18n';
 import {
   canStartAt,
   clampToPage,
+  cutSegment,
   deleteDot,
   dotLabels,
   Draft,
   history,
   insertDot,
+  mergeDots,
   moveDot,
   nearestDot,
   nearestSegment,
@@ -18,9 +20,11 @@ import {
   Pt,
   startAt,
   starts,
+  unmergeDot,
+  visits,
 } from './model';
 
-type Tool = 'move' | 'add' | 'delete';
+type Tool = 'move' | 'add' | 'delete' | 'merge' | 'cut';
 const HIT_PX = 16; // finger-friendly hit radius in screen pixels
 const ZOOMS = [1, 1.5, 2, 3, 4];
 
@@ -100,6 +104,8 @@ export function Editor(props: {
 
   const [tool, setTool] = useState<Tool>('move');
   const [sel, setSel] = useState<number | null>(null);
+  // merge tool: the first dot tapped, waiting for the second one
+  const [pick, setPick] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
   const [showSource, setShowSource] = useState(true);
   // dense sheets on a phone turn into a cloud of digits: start without numbers there
@@ -126,6 +132,7 @@ export function Editor(props: {
 
   // the selection may point past the end after undo or delete
   const selected = sel !== null && sel < d.dots.length ? sel : null;
+  const picked = pick !== null && pick < d.dots.length ? pick : null;
   const labels = useMemo(() => dotLabels(d, props.numbering), [d, props.numbering]);
   const ringed = useMemo(() => starts(d), [d]);
 
@@ -152,6 +159,36 @@ export function Editor(props: {
       if (hit !== null) {
         apply(deleteDot(d, hit));
         setSel(null);
+      }
+      return;
+    }
+    if (tool === 'merge') {
+      if (hit === null) {
+        setPick(null);
+        flash(t.missDot);
+      } else if (picked === null || picked === hit) {
+        setPick(picked === hit ? null : hit);
+        setSel(null);
+      } else {
+        const { draft, kind } = mergeDots(d, picked, hit);
+        apply(draft);
+        setPick(null);
+        setSel(hit > picked ? hit - 1 : hit);
+        flash(kind === 'joined' ? t.mergedJoined : kind === 'closed' ? t.mergedClosed : t.merged);
+      }
+      return;
+    }
+    if (tool === 'cut') {
+      // the ends of a segment are dots: cut anywhere between them, but not on a dot itself
+      // short segments on dense sheets: only the dot itself (not its finger zone) blocks a cut
+      const onDot = nearestDot(d, p, Math.max(plan.dotR * 1.6, tol * 0.4));
+      const seg = onDot === null ? nearestSegment(d, p, tol, 0) : null;
+      if (seg) {
+        apply(cutSegment(d, seg.path, seg.seg));
+        setSel(null);
+        flash(t.cutDone);
+      } else {
+        flash(onDot === null ? t.missTap : t.cutOnDot);
       }
       return;
     }
@@ -214,6 +251,11 @@ export function Editor(props: {
         dispatch({ type: 'redo' });
         return;
       }
+      if (e.key === 'Escape') {
+        setPick(null);
+        setSel(null);
+        return;
+      }
       const cur = latest.current;
       if (selected === null) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -258,11 +300,19 @@ export function Editor(props: {
   const fontSize = Math.max(dotR * 2.6, Math.min(10, 2 + 6 * zoom) / scale);
   const hitR = Math.max(dotR * 1.5, HIT_PX / scale);
   const img = plan.image;
-  const hint = tool === 'move' ? t.hintMove : tool === 'add' ? t.hintAdd : t.hintDelete;
+  const hint = {
+    move: t.hintMove,
+    add: t.hintAdd,
+    delete: t.hintDelete,
+    merge: picked === null ? t.hintMerge : t.hintMergePick,
+    cut: t.hintCut,
+  }[tool];
   const toolDefs: Array<[Tool, string, typeof Hand]> = [
     ['move', t.toolMove, Hand],
     ['add', t.toolAdd, Plus],
     ['delete', t.toolDelete, Eraser],
+    ['merge', t.toolMerge, Combine],
+    ['cut', t.toolCut, Scissors],
   ];
 
   return (
@@ -286,7 +336,11 @@ export function Editor(props: {
               role="radio"
               aria-checked={tool === k}
               className={tool === k ? 'is-on' : ''}
-              onClick={() => setTool(k)}
+              onClick={() => {
+                setTool(k);
+                setPick(null);
+                setNote(null);
+              }}
               data-testid={`tool-${k}`}
             >
               <Icon size={16} aria-hidden="true" /> {label}
@@ -366,6 +420,7 @@ export function Editor(props: {
             {d.dots.map(([x, y], i) => (
               <g key={i} className={i === selected ? 'is-sel' : undefined} data-testid={`dot-${i}`}>
                 {i === selected && <circle cx={x} cy={y} r={dotR + Math.max(3, 6 / scale)} className="ed-sel" />}
+                {i === picked && <circle cx={x} cy={y} r={dotR + Math.max(3, 7 / scale)} className="ed-pick" data-testid="dot-picked" />}
                 {ringed.has(i) && d.paths.length > 1 && <circle cx={x} cy={y} r={dotR + 2} className="ed-ring" />}
                 <circle cx={x} cy={y} r={dotR} className="ed-dot" />
                 <circle cx={x} cy={y} r={hitR} className="ed-hit" />
@@ -399,6 +454,16 @@ export function Editor(props: {
             >
               <Trash2 size={15} aria-hidden="true" /> {t.deleteDot}
             </button>
+            {visits(d, selected) > 1 && (
+              <button
+                type="button"
+                className="btn-ghost btn-small"
+                onClick={() => apply(unmergeDot(d, selected, plan.page, Math.max(dotR * 3, 8 / scale)))}
+                data-testid="button-unmerge"
+              >
+                <Split size={15} aria-hidden="true" /> {t.unmerge}
+              </button>
+            )}
             {canStartAt(d, selected) && (
               <button type="button" className="btn-ghost btn-small" onClick={() => apply(startAt(d, selected))} data-testid="button-start-here">
                 <Flag size={15} aria-hidden="true" /> {t.startHere}
