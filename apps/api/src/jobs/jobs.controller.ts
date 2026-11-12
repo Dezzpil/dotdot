@@ -18,7 +18,7 @@ import { RateLimit } from '../common/rate-limit.js';
 import { CreateJobDto } from './create-job.dto.js';
 import { EditJobDto } from './edit-plan.js';
 import { JobEventsService } from './job-events.service.js';
-import { JobView } from './job-view.js';
+import { isFinal, JobView } from './job-view.js';
 import { JobsService } from './jobs.service.js';
 
 const SSE_MAX_MS = 5 * 60 * 1000;
@@ -30,7 +30,7 @@ export class JobsController {
     private readonly events: JobEventsService,
   ) {}
 
-  /** Upload a drawing. Multipart: file + optional mode/numbering/level/labels/lang. */
+  /** Upload a drawing. Multipart: file + optional mode/strategy/numbering/level/labels/lang/math_max. */
   @Post()
   @HttpCode(202)
   @RateLimit('create')
@@ -39,7 +39,7 @@ export class JobsController {
     return this.jobs.create(file, dto);
   }
 
-  /** A new version of a finished drawing with the user's dots. JSON: {dots, paths, numbering?, labels?, lang?}. */
+  /** A new version of a finished drawing with the user's dots. JSON: {dots, paths, groups, numbering?, labels?, lang?}. */
   @Post(':id/edit')
   @HttpCode(202)
   @RateLimit('create')
@@ -62,7 +62,7 @@ export class JobsController {
     const views = merge(of(null), this.events.stream(id)).pipe(
       throttleTime(250, undefined, { leading: true, trailing: true }),
       concatMap(() => defer(() => this.jobs.get(id))),
-      takeWhile((v) => v.status !== 'done' && v.status !== 'failed', true),
+      takeWhile((v) => !isFinal(v), true),
     );
     return new Observable<MessageEvent>((sub) => {
       const s = views.subscribe({

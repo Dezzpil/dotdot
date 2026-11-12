@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from .objects import INK_HEX
 from .strokes import Stroke
 
 
@@ -20,9 +21,11 @@ class Dot:
 class SeqItem:
     dot: int
     number: int
-    series: int  # stroke index (for series numbering)
+    series: int  # stroke index (labels.away_dir walks it)
     text: str = ""
     starts_stroke: bool = False
+    group: int = 0  # object index
+    group_number: int = 0  # number inside the object, restarts at 1
 
 
 @dataclass(eq=False)
@@ -31,6 +34,9 @@ class Plan:
     seq: list[SeqItem]
     paths: list[list[int]]  # per dotted stroke: list of seq indices in drawing order
     lines: list[np.ndarray]  # strokes kept as plain lines (page coords)
+    groups: list[int] = field(default_factory=list)  # object index per path
+    colors: list[str] = field(default_factory=list)  # "#rrggbb" per object
+    solids: list[np.ndarray] = field(default_factory=list)  # filled areas, closed polygons (page pt)
 
 
 def rdp_indices(pts: np.ndarray, eps: float) -> list[int]:
@@ -103,7 +109,7 @@ def simplify(s: Stroke, eps: float, dmin: float, maxseg: float = 1e9) -> np.ndar
 
 def choose_eps(strokes: list[Stroke], target: int, dmin: float, maxseg: float) -> float:
     lo, hi = 0.3, 400.0
-    for _ in range(28):
+    for _ in range(18):
         mid = (lo * hi) ** 0.5
         n = sum(len(simplify(s, mid, dmin, maxseg)) for s in strokes)
         if n > target:
@@ -113,9 +119,115 @@ def choose_eps(strokes: list[Stroke], target: int, dmin: float, maxseg: float) -
     return hi
 
 
+def _fit(strokes: list[Stroke], eps0: float, target: int, dmin: float,
+         maxseg: float) -> tuple[float, float]:
+    """Tolerance and arc subdivision that land as close to the target as the geometry allows."""
+    def count(eps: float, seg: float) -> int:
+        return sum(len(simplify(s, eps, dmin, seg)) for s in strokes)
+
+    def search(lo: float, hi: float) -> float:
+        """Coarsest arc step whose corners-only count still fits; count(400, ·) falls as the step grows."""
+        for _ in range(10):
+            mid = (lo * hi) ** 0.5
+            if count(400.0, mid) > target:
+                lo = mid
+            else:
+                hi = mid
+        return hi
+
+    seg = maxseg
+    if count(400.0, maxseg) > target:
+        seg = search(maxseg, maxseg * 64)  # too many corners: stretch the step between them
+    elif count(eps0, maxseg) < target * 0.97:
+        seg = search(dmin * 1.5, maxseg)  # room to spare: break long arcs into more dots
+    return max(eps0, choose_eps(strokes, target, dmin, seg)), seg
+
+
+DOT_FLOOR = 5  # a stroke that cannot hold this many dots is printed as a line, not dotted
+
+
+def _quotas(sel: list[Stroke], budget: int, cost: dict[int, int]) -> dict[int, float]:
+    """Water-filling: a stroke that fits its share keeps the level tolerance, the rest split the remainder."""
+    quota: dict[int, float] = {}
+    active, left = list(sel), float(budget)
+    while active:
+        total = sum(s.length for s in active)
+        cheap = [s for s in active if cost[id(s)] <= left * s.length / total]
+        if not cheap:
+            break
+        for s in cheap:
+            quota[id(s)] = cost[id(s)]
+            left -= cost[id(s)]
+        active = [s for s in active if id(s) not in quota]
+    total = sum(s.length for s in active)
+    for s in active:
+        quota[id(s)] = left * s.length / total if total else 0.0
+    if left > 0 and not active:
+        # every stroke fits: spend the rest on breaking long arcs, longest first
+        total = sum(s.length for s in sel)
+        for s in sel:
+            quota[id(s)] += left * s.length / total
+    return quota
+
+
+def allocate(strokes: list[Stroke], budget: int, eps0: float, dmin: float, maxseg: float,
+             floor: int = DOT_FLOOR) -> dict[int, tuple[float, float]]:
+    """Share the budget by length: the longest strokes get in, each with its own tolerance.
+
+    A stroke spends its share on bends; only a share too big for its bends is spent on
+    breaking long arcs. Strokes missing from the table are printed as plain lines.
+    """
+    cost = {id(s): len(simplify(s, eps0, dmin)) for s in strokes}
+    able = [s for s in strokes if cost[id(s)] >= floor] or list(strokes)
+    order = sorted(able, key=lambda s: -s.length)
+    if not order:
+        return {}
+    sel, quota = order, {}
+    for k in range(len(order), 0, -1):
+        sel = order[:k]
+        quota = _quotas(sel, budget, cost)
+        if min(quota.values()) >= floor:
+            break
+    table, rich = {}, {}
+    for s in sel:
+        q = max(2, round(quota[id(s)]))
+        fit = ((choose_eps([s], q, dmin, 1e9), 1e9) if cost[id(s)] >= q
+               else _fit([s], eps0, q, dmin, maxseg))
+        table[id(s)] = fit
+        # the quota is a promise, the spacing may still break it: such a stroke is printed
+        if len(simplify(s, fit[0], dmin, fit[1])) >= floor:
+            rich[id(s)] = fit
+    return rich or table
+
+
+def number_paths(dots: list[Dot], dot_paths: list[list[int]],
+                 groups: list[int]) -> tuple[list[SeqItem], list[list[int]]]:
+    """Both numberings at once: across the sheet and inside each object.
+
+    A dot visited by two lines keeps one entry per visit, so it can carry two numbers."""
+    seq: list[SeqItem] = []
+    paths: list[list[int]] = []
+    gnum: dict[int, int] = {}
+    for pi, ids in enumerate(dot_paths):
+        gi = groups[pi]
+        path = []
+        for j, di in enumerate(ids):
+            gnum[gi] = gnum.get(gi, 0) + 1
+            seq.append(SeqItem(di, len(seq) + 1, pi, starts_stroke=(j == 0),
+                               group=gi, group_number=gnum[gi]))
+            dots[di].labels.append(len(seq) - 1)
+            path.append(len(seq) - 1)
+        paths.append(path)
+    return seq, paths
+
+
 def build_plan(strokes: list[Stroke], lines: list[Stroke], eps0: float, target: int, dmin: float,
-               maxseg: float) -> Plan:
-    """strokes/lines are already in page coordinates and in drawing order."""
+               maxseg: float, group_cap: int | None = None, colors: list[str] | None = None,
+               solids: list[np.ndarray] | None = None, quota: bool = False) -> Plan:
+    """strokes/lines are already in page coordinates and in drawing order.
+
+    group_cap limits the numbers inside one object (math answers must stay small).
+    quota shares the budget between strokes; otherwise dots are spread over the whole drawing."""
     # strokes too small to hold a sensible number of dots become plain lines
     dotted = []
     for s in strokes:
@@ -128,14 +240,45 @@ def build_plan(strokes: list[Stroke], lines: list[Stroke], eps0: float, target: 
         shortest = min(dotted, key=lambda s: s.length)
         dotted.remove(shortest)
         lines.append(shortest)
-    eps = eps0
-    if sum(len(simplify(s, eps, dmin, maxseg)) for s in dotted) > target:
-        maxseg = 1e9  # over budget: drop the extra in-between dots first
-        eps = max(eps0, choose_eps(dotted, target, dmin, maxseg))
+
+    def demote(part: list[Stroke], kept: dict[int, tuple[float, float]]) -> None:
+        for s in list(part):
+            if id(s) not in kept:
+                dotted.remove(s)
+                lines.append(s)
+
+    if quota:
+        table = allocate(dotted, target, eps0, dmin, maxseg)
+        demote(dotted, table)
+    else:
+        eps, seg = _fit(dotted, eps0, target, dmin, maxseg) if dotted else (eps0, maxseg)
+        table = {id(s): (eps, seg) for s in dotted}
+
+    def count(s: Stroke) -> int:
+        e, g = table[id(s)]
+        return len(simplify(s, e, dmin, g))
+
+    # an object over the answer limit is simplified on its own, never split
+    if group_cap:
+        for gi in sorted({s.group for s in dotted}):
+            part = [s for s in dotted if s.group == gi]
+            # a loop repeats its first dot, so it costs one number more than it has dots
+            while len(part) > 1 and sum(min_cost(s) + s.closed for s in part) > group_cap:
+                shortest = min(part, key=lambda s: s.length)
+                part.remove(shortest)
+                dotted.remove(shortest)
+                lines.append(shortest)
+            room = group_cap - sum(s.closed for s in part)
+            if sum(count(s) for s in part) > room:
+                if quota:
+                    sub = allocate(part, room, eps0, dmin, maxseg)
+                    demote(part, sub)
+                    table.update(sub)
+                else:
+                    e, g = _fit(part, eps, room, dmin, seg)
+                    table.update({id(s): (e, g) for s in part})
 
     dots: list[Dot] = []
-    seq: list[SeqItem] = []
-    paths: list[list[int]] = []
     merge = dmin * 0.8
 
     def dot_at(p: np.ndarray) -> int:
@@ -145,9 +288,11 @@ def build_plan(strokes: list[Stroke], lines: list[Stroke], eps0: float, target: 
         dots.append(Dot(np.array(p, float)))
         return len(dots) - 1
 
-    number = 0
-    for si, s in enumerate(dotted):
-        pts = simplify(s, eps, dmin, maxseg)
+    dot_paths: list[list[int]] = []
+    groups: list[int] = []
+    for s in dotted:
+        e, g = table[id(s)]
+        pts = simplify(s, e, dmin, g)
         ids = []
         for p in pts:
             di = dot_at(p)
@@ -158,14 +303,12 @@ def build_plan(strokes: list[Stroke], lines: list[Stroke], eps0: float, target: 
         if len(ids) < 2:
             lines.append(s)
             continue
-        path = []
-        for j, di in enumerate(ids):
-            number += 1
-            seq.append(SeqItem(di, number, len(paths), starts_stroke=(j == 0)))
-            dots[di].labels.append(len(seq) - 1)
-            path.append(len(seq) - 1)
-        paths.append(path)
-    return Plan(dots, seq, paths, [l.pts for l in lines])
+        dot_paths.append(ids)
+        groups.append(s.group)
+    seq, paths = number_paths(dots, dot_paths, groups)
+    n_groups = max(groups, default=-1) + 1
+    palette = list(colors[:n_groups]) if colors else [INK_HEX] * n_groups
+    return Plan(dots, seq, paths, [l.pts for l in lines], groups, palette, list(solids or []))
 
 
 SERIES = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -199,10 +342,11 @@ def math_expr(n: int, rng: random.Random, level: str) -> str:
 def assign_texts(plan: Plan, numbering: str, labels: str, level: str, seed: int) -> None:
     rng = random.Random(seed)
     for si, path in enumerate(plan.paths):
-        for j, qi in enumerate(path):
+        gi = plan.groups[si]
+        for qi in path:
             it = plan.seq[qi]
-            n = it.number if numbering == "jumps" else j + 1
+            n = it.number if numbering == "jumps" else it.group_number
             core = str(n) if labels == "numbers" else math_expr(n, rng, level)
             if numbering == "series":
-                core = f"{series_name(si)}{core}" if labels == "numbers" else f"{series_name(si)}: {core}"
+                core = f"{series_name(gi)}{core}" if labels == "numbers" else f"{series_name(gi)}: {core}"
             it.text = core

@@ -18,7 +18,9 @@ def school():
 
 def test_plan_json_describes_the_sheet(school):
     p = json.loads(school.plan)
-    assert p["v"] == 1 and p["page"]["w"] > 0
+    assert p["v"] == 2 and p["page"]["w"] > 0
+    assert len(p["groups"]) == len(p["paths"])
+    assert len(p["colors"]) > max(p["groups"])
     assert len(p["dots"]) == school.stats["dots"]
     assert len(p["paths"]) == school.stats["strokes"]
     assert sum(len(x) for x in p["paths"]) == school.stats["numbers"]
@@ -60,7 +62,8 @@ def test_unused_dots_and_repeats_are_cleaned():
 
 
 @pytest.mark.parametrize("bad", [
-    {"v": 2},
+    {"v": 3},
+    {"v": True},
     {"v": 1, "page": {"w": 595, "h": 842}, "dots": [[1e6, 1]], "paths": [[0, 0]]},
     {"v": 1, "page": {"w": 595, "h": 842}, "dots": [[10, 10]], "paths": [[0, 5]]},
     {"v": 1, "page": {"w": 595, "h": 842}, "dots": [[10, 10], [20, 20]], "paths": [[0]]},

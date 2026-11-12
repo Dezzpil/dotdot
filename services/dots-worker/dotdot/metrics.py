@@ -1,6 +1,7 @@
 """Objective quality metrics for a laid-out puzzle (used by tests and tuning)."""
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 from .dots import Plan
@@ -43,10 +44,12 @@ def evaluate(plan: Plan, placed: list[Placed], dot_r: float) -> dict:
         others = [box_d(x, y) for i, (x, y) in enumerate(xy) if i != p.dot]
         if others and min(others) < own - 0.5:
             ambiguous += 1
-        for line in plan.lines:
-            if any(_seg_hits_rect(a, b, r) for a, b in zip(line, line[1:])):
-                lab_line += 1
-                break
+        on_line = any(any(_seg_hits_rect(a, b, r) for a, b in zip(line, line[1:])) for line in plan.lines)
+        if not on_line:
+            corners = ((r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3]), (cx, cy))
+            on_line = any(cv2.pointPolygonTest(np.asarray(poly, np.float32), (float(x), float(y)), False) >= 0
+                          for poly in plan.solids for x, y in corners)
+        lab_line += int(on_line)
         for path in plan.paths:
             if any(_seg_hits_rect(xy[plan.seq[a].dot], xy[plan.seq[b].dot], r, -0.5) for a, b in zip(path, path[1:])):
                 lab_seg += 1
@@ -55,3 +58,29 @@ def evaluate(plan: Plan, placed: list[Placed], dot_r: float) -> dict:
     return {"labels": len(placed), "label_overlaps": lab_lab, "label_on_dot": lab_dot,
             "ambiguous": ambiguous, "label_on_line": lab_line, "label_on_solution": lab_seg,
             "strokes": len(plan.paths), "multi_number_dots": multi}
+
+
+def ink_coverage(plan: Plan, ink: np.ndarray, sw: float, to_px) -> dict:
+    """How well the answer sheet reproduces the drawing, measured in image pixels.
+
+    The answer draws a band of the original line width, not a hairline: a centreline
+    reproduces the stroke, so it must be compared against the stroke.
+    """
+    canvas = np.zeros(ink.shape, np.uint8)
+    t = max(1, int(round(sw)))
+    xy = np.array([d.xy for d in plan.dots]) if plan.dots else np.zeros((0, 2))
+    for path in plan.paths:
+        pts = xy[[plan.seq[q].dot for q in path]]
+        cv2.polylines(canvas, [np.round(to_px(pts)).astype(np.int32)], False, 1, t)
+    for line in plan.lines:
+        cv2.polylines(canvas, [np.round(to_px(line)).astype(np.int32)], False, 1, t)
+    for poly in plan.solids:
+        cv2.fillPoly(canvas, [np.round(to_px(poly)).astype(np.int32)], 1)
+    drawn = canvas > 0
+    k = np.ones((3, 3), np.uint8)
+    # one pixel of slack on the other side of each comparison, so a faithful answer scores 1
+    near_drawn = cv2.dilate(drawn.astype(np.uint8), k) > 0
+    near_ink = cv2.dilate(ink.astype(np.uint8), k) > 0
+    return {"recall": round(int((ink & near_drawn).sum()) / max(1, int(ink.sum())), 4),
+            "precision": round(int((drawn & near_ink).sum()) / max(1, int(drawn.sum())), 4),
+            "ink_px": int(ink.sum()), "drawn_px": int(drawn.sum())}

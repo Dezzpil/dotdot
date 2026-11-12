@@ -1,6 +1,6 @@
 import { Moon, Sun } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { ApiFailure, createJob, FALLBACK_CONFIG, getConfig, JobOptions, PublicConfig } from './api';
+import { ApiFailure, createJob, FALLBACK_CONFIG, getConfig, JobOptions, PublicConfig, Strategy } from './api';
 import { Dottie, Logo } from './components/Brand';
 import { donateLinks } from './components/Donate';
 import { JobScreen } from './components/JobScreen';
@@ -65,7 +65,7 @@ export function App() {
   const [route, goJob] = useJobHash();
   const jobId = route.id;
   const [picked, setPicked] = useState<Picked | null>(null);
-  const [options, setOptions] = useState<JobOptions>({ mode: 'auto', numbering: 'jumps', level: 'kid', labels: 'numbers', lang });
+  const [options, setOptions] = useState<JobOptions>({ mode: 'auto', strategy: 'auto', numbering: 'color', level: 'kid', labels: 'numbers', lang, math_max: 100 });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,12 +82,12 @@ export function App() {
   const showError = (code: string, retryAfterSec?: number) =>
     setError(errorText(t, code, { maxUploadMb: config.limits.maxUploadMb, retryAfterSec }));
 
-  const submit = async () => {
+  const send = async (opts: JobOptions) => {
     if (!picked) return;
     setBusy(true);
     setError(null);
     try {
-      const job = await createJob(picked.blob, options, picked.name);
+      const job = await createJob(picked.blob, opts, picked.name);
       goJob(job.id);
     } catch (e) {
       const f = e instanceof ApiFailure ? e : new ApiFailure('INTERNAL', 0);
@@ -95,6 +95,15 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const submit = () => send(options);
+
+  /** Another grouping of the same drawing: the cache keys on the options, so a repeat pick is instant. */
+  const regroup = (strategy: Strategy) => {
+    const next = { ...options, strategy };
+    setOptions(next);
+    return send(next);
   };
 
   const reset = () => {
@@ -143,9 +152,12 @@ export function App() {
             key={jobId}
             id={jobId}
             config={config}
+            busy={busy}
+            onStrategy={picked ? regroup : undefined}
             onAgain={picked ? () => goJob(null) : undefined}
             onRetry={picked ? submit : undefined}
             onEdit={() => goJob(jobId, true)}
+            onOpen={(id) => goJob(id)}
             onNew={reset}
           />
         ) : picked ? (

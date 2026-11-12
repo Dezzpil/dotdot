@@ -1,6 +1,6 @@
 import { Controller, Get, Inject } from '@nestjs/common';
 import { APP_CONFIG, AppConfig } from '../config.js';
-import { LABELS, LANGS, LEVELS, MODES, NUMBERINGS } from '../jobs/create-job.dto.js';
+import { LABELS, LANGS, LEVELS, MODES, NUMBERINGS, STRATEGIES } from '../jobs/create-job.dto.js';
 
 /** Public settings for the web app: limits, option values, donate links. */
 @Controller('config')
@@ -17,11 +17,12 @@ export class MetaController {
       },
       options: {
         mode: MODES,
+        strategy: STRATEGIES,
         numbering: NUMBERINGS,
         level: LEVELS,
         labels: LABELS,
         lang: LANGS,
-        defaults: { mode: 'auto', numbering: 'jumps', level: 'school', labels: 'numbers', lang: 'ru' },
+        defaults: { mode: 'auto', strategy: 'auto', numbering: 'color', level: 'school', labels: 'numbers', lang: 'ru', math_max: 100 },
         defaultModeByLevel: { kid: 'outline', school: 'all', adult: 'all' },
       },
       donate: this.cfg.donate,

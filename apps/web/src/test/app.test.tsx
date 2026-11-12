@@ -22,7 +22,7 @@ beforeEach(() => {
       progress: 100,
       position: null,
       createdAt: 1,
-      result: { pdf: `/api/jobs/${ID}/files/dotdot.pdf`, puzzle: '/p.png', answer: '/a.png', stats: { dots: 48, strokes: 2 } },
+      result: { pdf: `/api/jobs/${ID}/files/dotdot.pdf`, puzzle: '/p.png', answer: '/a.png', stats: { dots: 48, strokes: 2, contours: 3 } },
     },
   ];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -58,18 +58,25 @@ describe('DotDot web app', () => {
 
     await user.click(screen.getByTestId('radio-level-adult'));
     await user.click(screen.getByTestId('button-more'));
+    expect(screen.queryByTestId('input-math-max')).toBeNull();
     await user.click(screen.getByTestId('radio-labels-math'));
+    const limit = screen.getByTestId('input-math-max');
+    await user.clear(limit);
+    await user.type(limit, '25');
     await user.click(screen.getByTestId('button-submit'));
 
     await waitFor(() => expect(window.location.hash).toBe(`#/job/${ID}`));
     expect(posted?.get('level')).toBe('adult');
     expect(posted?.get('labels')).toBe('math');
+    expect(posted?.get('math_max')).toBe('25');
+    expect(posted?.get('numbering')).toBe('color');
     expect(posted?.get('lang')).toBe('ru');
     expect(posted?.get('mode')).toBe('auto');
 
     await waitFor(() => expect(screen.getByTestId('text-done').textContent).toBe('48 точек ждут карандаша.'), { timeout: 5000 });
     expect(screen.getByTestId('link-download').getAttribute('href')).toBe(`/api/jobs/${ID}/files/dotdot.pdf`);
     expect(screen.getByTestId('text-lines').textContent).toBe('2');
+    expect(screen.getByTestId('text-contours').textContent).toBe('3');
     expect(screen.getByTestId('link-donate-cloudtips').getAttribute('href')).toBe('https://example.org/tip');
 
     await user.click(screen.getByTestId('tab-answer'));
@@ -78,6 +85,40 @@ describe('DotDot web app', () => {
     // "another level" goes back to the settings with the same picture
     await user.click(screen.getByTestId('button-again'));
     expect(screen.getByTestId('text-filename').textContent).toBe('cat.png');
+  });
+
+  it('counts one contour quietly and numbers the whole chain when asked', async () => {
+    const user = userEvent.setup();
+    jobReplies = [{ ...(jobReplies[1] as any), result: { ...(jobReplies[1] as any).result, stats: { dots: 12, strokes: 1 } } }];
+    render(
+      <I18nProvider initial="ru">
+        <App />
+      </I18nProvider>,
+    );
+    await user.upload(screen.getByTestId('input-file'), png());
+    await user.click(screen.getByTestId('button-more'));
+    await user.click(screen.getByTestId('radio-numbering-jumps'));
+    await user.click(screen.getByTestId('button-submit'));
+    await waitFor(() => expect(posted?.get('numbering')).toBe('jumps'));
+    expect(await screen.findByTestId('text-dots')).toBeTruthy();
+    expect(screen.queryByTestId('text-contours')).toBeNull();
+    expect(screen.queryByTestId('text-lines')).toBeTruthy();
+  });
+
+  it('says honestly that the budget may leave part of the drawing printed', async () => {
+    const user = userEvent.setup();
+    render(
+      <I18nProvider initial="ru">
+        <App />
+      </I18nProvider>,
+    );
+    await user.upload(screen.getByTestId('input-file'), png());
+    await user.click(screen.getByTestId('button-more'));
+    expect(screen.getByTestId('text-mode-hint').textContent).toContain('напечатаем линиями');
+    await user.click(screen.getByTestId('radio-mode-all'));
+    expect(screen.getByText('Весь рисунок, сколько поместится')).toBeTruthy();
+    await user.click(screen.getByTestId('button-submit'));
+    await waitFor(() => expect(posted?.get('mode')).toBe('all'));
   });
 
   it('refuses unsupported and oversized files with a friendly hint', async () => {

@@ -1,7 +1,7 @@
 """Chain graph edges into long pen strokes and order them for drawing."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -13,6 +13,7 @@ class Stroke:
     pts: np.ndarray  # (N, 2) polyline
     closed: bool
     edge_ids: list = field(default_factory=list)  # real graph edges used (virtual bridges excluded)
+    group: int = 0  # object index: one colour and one numbering per object
 
     @property
     def length(self) -> float:
@@ -32,8 +33,14 @@ def _dir(pts: np.ndarray, look: float) -> np.ndarray:
     return v / n if n > 1e-9 else np.array([1.0, 0.0])
 
 
-def _bridges(g: Graph, edges: dict[int, Edge], max_gap: float) -> dict[int, Edge]:
-    """Invisible links between odd-degree nodes that almost touch: each one removes a pen lift."""
+def _bridges(g: Graph, edges: dict[int, Edge], max_gap: float,
+             of_node: dict[int, int] | None = None,
+             comp_of_node: dict[int, int] | None = None) -> dict[int, Edge]:
+    """Invisible links between odd-degree nodes that almost touch: each one removes a pen lift.
+
+    Nodes of different objects are never linked: a bridge across objects would drag one
+    contour's numbering into another colour. Nor are nodes of different components inside
+    one object: two decorations sharing a colour would get a real line between them."""
     deg: dict[int, int] = {}
     for e in edges.values():
         deg[e.u] = deg.get(e.u, 0) + 1
@@ -65,6 +72,10 @@ def _bridges(g: Graph, edges: dict[int, Edge], max_gap: float) -> dict[int, Edge
     pairs = []
     for i, a in enumerate(odd):
         for b in odd[i + 1:]:
+            if of_node is not None and of_node.get(a, 0) != of_node.get(b, 0):
+                continue
+            if comp_of_node is not None and comp_of_node.get(a, 0) != comp_of_node.get(b, 0):
+                continue
             d = float(np.hypot(*(g.nodes[a] - g.nodes[b])))
             # skip nodes already joined by a short path: a bridge there just makes a tiny loop
             if d < max_gap and path_len(a, b, max(4 * d, max_gap * 3)) == np.inf:
@@ -80,14 +91,17 @@ def _bridges(g: Graph, edges: dict[int, Edge], max_gap: float) -> dict[int, Edge
 
 
 def chain_edges(g: Graph, edge_ids: list[int], look: float, bridge: float = 0.0,
-                start_top: bool = False) -> list[Stroke]:
+                start_top: bool = False, of_edge: dict[int, int] | None = None,
+                of_node: dict[int, int] | None = None,
+                comp_of_node: dict[int, int] | None = None) -> list[Stroke]:
     """Greedy Euler-like walk: continue through junctions along the straightest unused edge.
 
     With start_top the first walk begins at the odd node closest to the top of the drawing,
-    so dot 1 lands near the top and the first stroke is returned first."""
+    so dot 1 lands near the top and the first stroke is returned first.
+    of_edge/of_node name the object each edge and node belongs to."""
     edges = {k: g.edges[k] for k in edge_ids}
     if bridge > 0:
-        edges.update(_bridges(g, edges, bridge))
+        edges.update(_bridges(g, edges, bridge, of_node, comp_of_node))
     inc: dict[int, list[int]] = {}
     for k, e in edges.items():
         inc.setdefault(e.u, []).append(k)
@@ -139,7 +153,7 @@ def chain_edges(g: Graph, edge_ids: list[int], look: float, bridge: float = 0.0,
             continue
         pts = np.vstack(parts)
         closed = bool(np.hypot(*(pts[0] - pts[-1])) < 1.5)
-        strokes.append(Stroke(pts, closed, ids))
+        strokes.append(Stroke(pts, closed, ids, group=of_edge[ids[0]] if of_edge else 0))
     return strokes
 
 
@@ -155,7 +169,7 @@ def order_strokes(strokes: list[Stroke], keep_first: bool = False) -> list[Strok
         i = int(np.argmin(first.pts[:, 1]))
         first = _rotate(first, i)
     elif not keep_first and first.pts[-1, 1] < first.pts[0, 1]:
-        first = Stroke(first.pts[::-1].copy(), False, first.edge_ids)
+        first = replace(first, pts=first.pts[::-1].copy(), closed=False)
     out = [first]
     while rest:
         end = out[-1].pts[-1]
@@ -167,7 +181,7 @@ def order_strokes(strokes: list[Stroke], keep_first: bool = False) -> list[Strok
                 if d[i] < best_d:
                     best, best_d, best_s = s, d[i], _rotate(s, i)
             else:
-                for cand in (s, Stroke(s.pts[::-1].copy(), False, s.edge_ids)):
+                for cand in (s, replace(s, pts=s.pts[::-1].copy(), closed=False)):
                     d = float(np.hypot(*(cand.pts[0] - end)))
                     if d < best_d:
                         best, best_d, best_s = s, d, cand
@@ -193,38 +207,47 @@ def start_at_top(strokes: list[Stroke], min_tail: float) -> list[Stroke]:
     head, tail = s.pts[:i + 1][::-1], s.pts[i:]
     seg = lambda p: float(np.hypot(*np.diff(p, axis=0).T).sum()) if len(p) > 1 else 0.0  # noqa: E731
     if seg(head) < min_tail:
-        return [Stroke(tail.copy(), False, s.edge_ids)] + rest
+        return [replace(s, pts=tail.copy(), closed=False)] + rest
     if seg(tail) < min_tail:
-        return [Stroke(head.copy(), False, s.edge_ids)] + rest
+        return [replace(s, pts=head.copy(), closed=False)] + rest
     # longer branch first, the other one is ordered like any other stroke
     a, b = (head, tail) if seg(head) >= seg(tail) else (tail, head)
-    return [Stroke(a.copy(), False, s.edge_ids), Stroke(b.copy(), False, s.edge_ids)] + rest
+    return [replace(s, pts=a.copy(), closed=False), replace(s, pts=b.copy(), closed=False)] + rest
 
 
 def _rotate(s: Stroke, i: int) -> Stroke:
     body = s.pts[:-1]
     r = np.vstack([body[i:], body[:i], body[i:i + 1]])
-    return Stroke(r, True, s.edge_ids)
+    return replace(s, pts=r, closed=True)
 
 
-def outline_edge_ids(g: Graph, ink: np.ndarray, stroke_width: float) -> list[int]:
-    """Edges that run along the outer silhouette of the drawing."""
+def order_groups(strokes: list[Stroke], min_tail: float) -> list[Stroke]:
+    """Object by object, each starting at its own top: numbering restarts inside every colour."""
+    out: list[Stroke] = []
+    for gi in sorted({s.group for s in strokes}):
+        part = [s for s in strokes if s.group == gi]
+        out += order_strokes(start_at_top(part, min_tail=min_tail), keep_first=True)
+    return out
+
+
+def outline_edge_ids(g: Graph, masks: list[np.ndarray], of_edge: dict[int, int],
+                     stroke_width: float) -> list[int]:
+    """Edges along the outer silhouette, computed per object so a second object is not dropped."""
     import cv2
     from scipy.ndimage import binary_fill_holes
 
-    sil = binary_fill_holes(ink).astype(np.uint8)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(sil, connectivity=8)
-    if n > 1:
-        big = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-        sil = (labels == big).astype(np.uint8)
-    boundary = sil - cv2.erode(sil, np.ones((3, 3), np.uint8))
-    dist = cv2.distanceTransform((1 - boundary).astype(np.uint8), cv2.DIST_L2, 5)
     lim = stroke_width * 0.75 + 2
+    h, w = masks[0].shape
+    dist: list[np.ndarray] = []
+    for m in masks:
+        sil = binary_fill_holes(m).astype(np.uint8)
+        boundary = sil - cv2.erode(sil, np.ones((3, 3), np.uint8))
+        dist.append(cv2.distanceTransform((1 - boundary).astype(np.uint8), cv2.DIST_L2, 5))
     out = []
-    h, w = ink.shape
     for k, e in g.edges.items():
+        gi = of_edge[k]
         p = np.clip(np.round(e.pts).astype(int), 0, [w - 1, h - 1])
-        frac = float((dist[p[:, 1], p[:, 0]] <= lim).mean())
+        frac = float((dist[gi][p[:, 1], p[:, 0]] <= lim).mean())
         if frac >= 0.6:
             out.append(k)
     return out

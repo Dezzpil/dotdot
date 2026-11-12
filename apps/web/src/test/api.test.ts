@@ -18,13 +18,15 @@ afterEach(() => vi.restoreAllMocks());
 describe('api client', () => {
   it('sends the file and every option as multipart', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(202, view('queued', { position: 3 })));
-    const v = await createJob(new Blob(['x']), { mode: 'auto', numbering: 'series', level: 'adult', labels: 'math', lang: 'en' }, 'a.png');
+    const v = await createJob(new Blob(['x']), { mode: 'auto', strategy: 'auto', numbering: 'color', level: 'adult', labels: 'math', lang: 'en', math_max: 25 }, 'a.png');
     expect(v.position).toBe(3);
     const [url, init] = spy.mock.calls[0];
     expect(url).toBe('/api/jobs');
     const form = init!.body as FormData;
-    expect(form.get('numbering')).toBe('series');
+    expect(form.get('numbering')).toBe('color');
+    expect(form.get('strategy')).toBe('auto');
     expect(form.get('labels')).toBe('math');
+    expect(form.get('math_max')).toBe('25');
     expect(form.get('file')).toBeInstanceOf(Blob);
   });
 
@@ -65,5 +67,35 @@ describe('api client', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(404, { error: { code: 'NOT_FOUND', message: 'x' } }));
     const err = await new Promise<ApiFailure>((resolve) => watchJob('j1', () => undefined, resolve, { useSse: false, pollMs: 5 }));
     expect(err.code).toBe('NOT_FOUND');
+  });
+
+  it('keeps watching a set until every variant is final', async () => {
+    const set = (states: Array<'done' | 'processing' | 'failed'>) =>
+      view('done', {
+        result: { stats: {}, variants: states.map((s, i) => ({ id: `v${i}`, target: 20 + i, status: s, progress: 0, position: null })) },
+      });
+    const replies = [set(['done', 'processing']), set(['done', 'failed'])];
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => json(200, replies.shift() ?? set(['done', 'failed'])));
+    let seen = 0;
+    await new Promise<void>((resolve) => {
+      watchJob(
+        'j1',
+        (v) => {
+          seen = v.result!.variants!.length;
+          if (v.result!.variants!.every((x) => x.status !== 'processing')) resolve();
+        },
+        () => undefined,
+        { useSse: false, pollMs: 5 },
+      );
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(seen).toBe(2);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves the dot count out of the form when it is automatic', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(202, view('queued')));
+    await createJob(new Blob(['x']), { mode: 'auto', strategy: 'auto', numbering: 'color', level: 'kid', labels: 'numbers', lang: 'ru', math_max: 100 });
+    expect((spy.mock.calls[0][1]!.body as FormData).has('target')).toBe(false);
   });
 });

@@ -6,51 +6,72 @@ import type { Numbering } from '../api';
 
 export type Pt = [number, number];
 
+export const INK_HEX = '#212129';
+
 export interface PlanDoc {
-  v: 1;
+  v: 1 | 2;
   page: { w: number; h: number };
   image?: { w: number; h: number; s: number; ox: number; oy: number };
   dotR: number;
   dots: Pt[];
   /** drawing order as dot indices; a closed line repeats its first dot at the end */
   paths: number[][];
+  /** object per line, index into colors (v2) */
+  groups?: number[];
+  colors?: string[];
   /** details printed as plain lines, not editable */
   lines: Pt[][];
+  /** filled areas (pupils), not editable */
+  solids?: Pt[][];
 }
 
 export interface Draft {
   dots: Pt[];
   paths: number[][];
+  /** object per line: one colour and one numbering starting at 1 */
+  groups: number[];
 }
+
+/** Sheets made before objects existed (v1): every line is its own object, all black. */
+export const draftOf = (plan: PlanDoc): Draft => ({
+  dots: plan.dots,
+  paths: plan.paths,
+  groups: plan.groups ?? plan.paths.map((_, i) => i),
+});
+
+export const planColors = (plan: PlanDoc): string[] => plan.colors ?? plan.paths.map(() => INK_HEX);
 
 export const isClosed = (p: number[]) => p.length >= 3 && p[0] === p[p.length - 1];
 
 export function moveDot(d: Draft, i: number, to: Pt): Draft {
   const dots = d.dots.slice();
   dots[i] = [Math.round(to[0] * 100) / 100, Math.round(to[1] * 100) / 100];
-  return { dots, paths: d.paths };
+  return { dots, paths: d.paths, groups: d.groups };
 }
 
 /** Remove a dot from every line; lines that become too short disappear, loops stay loops. */
 export function deleteDot(d: Draft, i: number): Draft {
   const paths: number[][] = [];
-  for (const p of d.paths) {
+  const groups: number[] = [];
+  d.paths.forEach((p, k) => {
     const closed = isClosed(p);
-    let core = (closed ? p.slice(0, -1) : p).filter((k) => k !== i);
-    core = core.filter((k, j) => j === 0 || core[j - 1] !== k);
+    let core = (closed ? p.slice(0, -1) : p).filter((j) => j !== i);
+    core = core.filter((j, m) => m === 0 || core[m - 1] !== j);
     if (closed && core.length > 1 && core[0] === core[core.length - 1]) core.pop();
     if (closed && core.length >= 3) paths.push([...core, core[0]]);
     else if (core.length >= 2) paths.push(core);
-  }
+    else return;
+    groups.push(d.groups[k]);
+  });
   const dots = d.dots.filter((_, k) => k !== i);
-  return { dots, paths: paths.map((p) => p.map((k) => (k > i ? k - 1 : k))) };
+  return { dots, paths: paths.map((p) => p.map((k) => (k > i ? k - 1 : k))), groups };
 }
 
 /** Insert a new dot into line `path` right after its `seg`-th dot. */
 export function insertDot(d: Draft, path: number, seg: number, at: Pt): Draft {
   const dots = [...d.dots, [Math.round(at[0] * 100) / 100, Math.round(at[1] * 100) / 100] as Pt];
   const paths = d.paths.map((p, k) => (k === path ? [...p.slice(0, seg + 1), dots.length - 1, ...p.slice(seg + 1)] : p));
-  return { dots, paths };
+  return { dots, paths, groups: d.groups };
 }
 
 /** Drop repeated neighbours; a "loop" of fewer than 3 distinct dots is just a there-and-back line. */
@@ -72,7 +93,7 @@ export function compact(d: Draft): Draft {
       dots.push(p);
     }
   });
-  return { dots, paths: d.paths.map((p) => p.map((k) => map.get(k)!)) };
+  return { dots, paths: d.paths.map((p) => p.map((k) => map.get(k)!)), groups: d.groups };
 }
 
 const isEnd = (p: number[], i: number) => !isClosed(p) && (p[0] === i || p[p.length - 1] === i);
@@ -86,6 +107,7 @@ export type MergeKind = 'joined' | 'closed' | 'merged';
 export function mergeDots(d: Draft, a: number, b: number): { draft: Draft; kind: MergeKind } {
   if (a === b) return { draft: d, kind: 'merged' };
   let paths = d.paths.map((p) => p.slice());
+  let groups = d.groups.slice();
   let kind: MergeKind = 'merged';
   const pa = paths.findIndex((p) => isEnd(p, a));
   const pb = paths.findIndex((p, k) => k !== pa && isEnd(p, b));
@@ -95,19 +117,26 @@ export function mergeDots(d: Draft, a: number, b: number): { draft: Draft; kind:
     const Q = paths[pb][0] === b ? paths[pb] : paths[pb].slice().reverse();
     const joined = [...P.slice(0, -1), ...Q];
     const first = Math.min(pa, pb);
+    const gi = groups[first]; // the joined line keeps the colour of the earlier one
     paths = paths.filter((_, k) => k !== pa && k !== pb);
+    groups = groups.filter((_, k) => k !== pa && k !== pb);
     paths.splice(first, 0, joined);
+    groups.splice(first, 0, gi);
     kind = 'joined';
   } else {
     const same = paths.findIndex((p) => isEnd(p, a) && isEnd(p, b));
     if (same >= 0 && paths[same].length >= 3) kind = 'closed';
   }
-  const next = paths
-    .map((p) => tidy(p.map((k) => (k === a ? b : k))))
-    .filter((p): p is number[] => p !== null)
-    .map((p) => p.map((k) => (k > a ? k - 1 : k)));
+  const next: number[][] = [];
+  const nextGroups: number[] = [];
+  paths.forEach((p, k) => {
+    const t = tidy(p.map((j) => (j === a ? b : j)));
+    if (!t) return;
+    next.push(t.map((j) => (j > a ? j - 1 : j)));
+    nextGroups.push(groups[k]);
+  });
   const dots = d.dots.filter((_, k) => k !== a);
-  return { draft: compact({ dots, paths: next }), kind };
+  return { draft: compact({ dots, paths: next, groups: nextGroups }), kind };
 }
 
 /** How many times a line passes through dot `i` (a loop's closing repeat does not count). */
@@ -140,7 +169,7 @@ export function unmergeDot(d: Draft, i: number, page: { w: number; h: number }, 
     }
     return out;
   });
-  return { dots, paths };
+  return { dots, paths, groups: d.groups };
 }
 
 /**
@@ -154,7 +183,8 @@ export function cutSegment(d: Draft, path: number, seg: number): Draft {
   const parts = isClosed(p) ? [[...p.slice(seg + 1), ...p.slice(1, seg + 1)]] : [p.slice(0, seg + 1), p.slice(seg + 1)];
   const keep = parts.map(tidy).filter((q): q is number[] => q !== null);
   const paths = [...d.paths.slice(0, path), ...keep, ...d.paths.slice(path + 1)];
-  return compact({ dots: d.dots, paths });
+  const groups = [...d.groups.slice(0, path), ...keep.map(() => d.groups[path]), ...d.groups.slice(path + 1)];
+  return compact({ dots: d.dots, paths, groups });
 }
 
 /**
@@ -173,7 +203,11 @@ export function startAt(d: Draft, i: number): Draft {
   } else if (!isClosed(p) && p[p.length - 1] === i) {
     next = p.slice().reverse();
   }
-  return { dots: d.dots, paths: [next, ...d.paths.filter((_, m) => m !== k)] };
+  return {
+    dots: d.dots,
+    paths: [next, ...d.paths.filter((_, m) => m !== k)],
+    groups: [d.groups[k], ...d.groups.filter((_, m) => m !== k)],
+  };
 }
 
 export function canStartAt(d: Draft, i: number): boolean {
@@ -197,17 +231,27 @@ export function seriesName(i: number): string {
 }
 
 /** What the worker will print next to each dot (numbers mode). */
-export function dotLabels(d: Draft, numbering: Numbering): string[] {
-  const out: string[][] = d.dots.map(() => []);
+export function dotLabelRuns(d: Draft, numbering: Numbering): { text: string; group: number }[][] {
+  const out: { text: string; group: number }[][] = d.dots.map(() => []);
+  const perGroup = new Map<number, number>();
   let n = 0;
-  d.paths.forEach((p, si) =>
-    p.forEach((di, j) => {
+  d.paths.forEach((p, si) => {
+    const gi = d.groups[si] ?? 0;
+    p.forEach((di) => {
       n += 1;
-      out[di].push(numbering === 'series' ? `${seriesName(si)}${j + 1}` : String(n));
-    }),
-  );
-  return out.map((x) => x.join('/'));
+      const k = (perGroup.get(gi) ?? 0) + 1;
+      perGroup.set(gi, k);
+      out[di].push({ text: numbering === 'series' ? `${seriesName(gi)}${k}` : String(numbering === 'jumps' ? n : k), group: gi });
+    });
+  });
+  // colour mode keeps one label per visit (each in its own colour), the rest share a "31/144" label
+  return numbering === 'color'
+    ? out
+    : out.map((ps) => (ps.length ? [{ text: ps.map((p) => p.text).join('/'), group: ps[0].group }] : []));
 }
+
+export const dotLabels = (d: Draft, numbering: Numbering): string[] =>
+  dotLabelRuns(d, numbering).map((ps) => ps.map((p) => p.text).join('/'));
 
 /** Dots that start a line get a ring on the sheet. */
 export const starts = (d: Draft) => new Set(d.paths.map((p) => p[0]));

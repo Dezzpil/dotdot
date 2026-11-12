@@ -22,6 +22,26 @@ const PLAN = {
   paths: [[0, 1, 2, 3, 0]],
   lines: [],
 };
+const COLOR_PLAN = {
+  v: 2,
+  page: { w: 600, h: 400 },
+  dotR: 2,
+  dots: [
+    [100, 100],
+    [200, 100],
+    [300, 100],
+    [400, 100],
+    [100, 300],
+    [300, 300],
+  ],
+  paths: [
+    [0, 1, 2, 3],
+    [4, 5],
+  ],
+  groups: [0, 1],
+  colors: ['#1f5fbf', '#d9480f'],
+  lines: [],
+};
 const done = (id: string, extra: Record<string, unknown> = {}) => ({
   id,
   status: 'done',
@@ -120,6 +140,7 @@ describe('dot editor', () => {
       [200, 300],
     ]);
     expect(edited.paths).toEqual([[0, 1, 3, 2, 0]]);
+    expect(edited.groups).toEqual([0]);
     expect(await screen.findByTestId('text-edited')).toBeTruthy();
   });
 
@@ -154,6 +175,72 @@ describe('dot editor', () => {
       [300, 100],
       [300, 300],
     ]);
+  });
+
+  it('paints each contour in its own colour and keeps it through a cut', async () => {
+    const user = userEvent.setup();
+    (globalThis.fetch as any).mockImplementation(async (input: unknown, init: any) => {
+      const url = String(input);
+      if (url.endsWith('/api/config')) return json(200, { limits: { maxUploadMb: 10, formats: [], resultTtlHours: 24 }, donate: {} });
+      if (url.endsWith('plan.json')) return json(200, COLOR_PLAN);
+      if (url.endsWith(`/api/jobs/${ID}/edit`)) {
+        edited = JSON.parse(String(init?.body));
+        return json(202, { id: NEW, status: 'queued', progress: 0, position: 1, createdAt: 2 });
+      }
+      return json(200, done(ID, { contours: 2, options: { numbering: 'color' } }));
+    });
+    const { container } = render(
+      <I18nProvider initial="ru">
+        <App />
+      </I18nProvider>,
+    );
+    await user.click(await screen.findByTestId('button-edit'));
+    const canvas = await screen.findByTestId('editor-canvas');
+    const strokes = () => Array.from(container.querySelectorAll('.ed-paths polyline')).map((p) => (p as SVGElement).style.stroke);
+    expect(strokes()).toEqual(['#1f5fbf', '#d9480f']);
+    expect(screen.getByTestId('dot-4').querySelector('.ed-dot')!.getAttribute('style')).toContain('#d9480f');
+    // every contour counts from 1, so the second line starts at 1 again
+    expect(Array.from(container.querySelectorAll('.ed-labels text')).map((n) => n.textContent)).toEqual(['1', '2', '3', '4', '1', '2']);
+
+    await user.click(screen.getByTestId('tool-cut'));
+    pointer(canvas, 'pointerDown', 250, 100); // the middle of the blue line
+    expect(strokes()).toEqual(['#1f5fbf', '#1f5fbf', '#d9480f']);
+    await user.click(screen.getByTestId('button-save'));
+    await waitFor(() => expect(edited).not.toBeNull());
+    expect(edited.groups).toEqual([0, 0, 1]);
+  });
+
+  it('shows filled areas as a read-only layer', async () => {
+    const user = userEvent.setup();
+    const solid = [
+      [140, 140],
+      [160, 140],
+      [160, 160],
+    ];
+    (globalThis.fetch as any).mockImplementation(async (input: unknown, init: any) => {
+      const url = String(input);
+      if (url.endsWith('/api/config')) return json(200, { limits: { maxUploadMb: 10, formats: [], resultTtlHours: 24 }, donate: {} });
+      if (url.endsWith('plan.json')) return json(200, { ...PLAN, solids: [solid] });
+      if (url.endsWith(`/api/jobs/${ID}/edit`)) {
+        edited = JSON.parse(String(init?.body));
+        return json(202, { id: NEW, status: 'queued', progress: 0, position: 1, createdAt: 2 });
+      }
+      return json(200, done(ID));
+    });
+    const { container } = render(
+      <I18nProvider initial="ru">
+        <App />
+      </I18nProvider>,
+    );
+    await user.click(await screen.findByTestId('button-edit'));
+    await screen.findByTestId('editor-canvas');
+    const polys = container.querySelectorAll('.ed-solid polygon');
+    expect(polys.length).toBe(1);
+    expect(polys[0].getAttribute('points')).toBe('140,140 160,140 160,160');
+
+    await user.click(screen.getByTestId('button-save'));
+    await waitFor(() => expect(edited).not.toBeNull());
+    expect(Object.keys(edited).sort()).toEqual(['dots', 'groups', 'paths']);
   });
 
   it('explains when an old sheet cannot be edited', async () => {

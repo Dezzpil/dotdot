@@ -1,6 +1,6 @@
 import { ChevronDown, RefreshCw } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
-import type { JobOptions, Labels, Lang, Level, Mode, Numbering } from '../api';
+import { useEffect, useState } from 'react';
+import type { JobOptions, Labels, Lang, Level, Mode, Numbering, Strategy } from '../api';
 import { useI18n } from '../i18n';
 import type { Picked } from './Upload';
 
@@ -50,6 +50,69 @@ function Segmented<T extends string>(props: {
   );
 }
 
+/** The answer limit is clamped when the field is left, so typing "25" is not fought mid-keystroke. */
+function MathMax({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const { t } = useI18n();
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  return (
+    <div className="num-field">
+      <label htmlFor="math-max">{t.mathMaxTitle}</label>
+      <input
+        id="math-max"
+        type="number"
+        min={10}
+        max={999}
+        step={1}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          const n = Math.min(999, Math.max(10, Math.round(Number(text) || value)));
+          setText(String(n));
+          onChange(n);
+        }}
+        data-testid="input-math-max"
+      />
+      <p className="muted small">{t.mathMaxHint}</p>
+    </div>
+  );
+}
+
+/** Empty means "pick for me"; a number is clamped when the field is left, like the answer limit. */
+function Target({ value, onChange }: { value: number | undefined; onChange: (v: number | undefined) => void }) {
+  const { t } = useI18n();
+  const [text, setText] = useState(value == null ? '' : String(value));
+  useEffect(() => setText(value == null ? '' : String(value)), [value]);
+  return (
+    <div className="num-field">
+      <label htmlFor="target">{t.targetTitle}</label>
+      <input
+        id="target"
+        type="number"
+        min={10}
+        max={1000}
+        step={1}
+        placeholder={t.targetPlaceholder}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          const n = Math.round(Number(text));
+          if (!text.trim() || !Number.isFinite(n) || n < 1) {
+            setText('');
+            onChange(undefined);
+            return;
+          }
+          const clamped = Math.min(1000, Math.max(10, n));
+          setText(String(clamped));
+          onChange(clamped);
+        }}
+        data-testid="input-target"
+      />
+      <p className="muted small">{t.targetHint}</p>
+    </div>
+  );
+}
+
 export function Setup(props: {
   picked: Picked;
   options: JobOptions;
@@ -61,8 +124,13 @@ export function Setup(props: {
 }) {
   const { t } = useI18n();
   const { options: o, onOptions } = props;
-  const url = useMemo(() => URL.createObjectURL(props.picked.blob), [props.picked.blob]);
-  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  // the URL is made inside the effect: StrictMode's second mount would reuse a revoked one
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    const u = URL.createObjectURL(props.picked.blob);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [props.picked.blob]);
   const set = <K extends keyof JobOptions>(k: K, v: JobOptions[K]) => onOptions({ ...o, [k]: v });
 
   return (
@@ -75,7 +143,7 @@ export function Setup(props: {
     >
       <section className="setup-preview card" aria-label={t.yourDrawing}>
         <div className="preview-frame">
-          <img src={url} alt={t.yourDrawing} data-testid="img-preview" />
+          {url && <img src={url} alt={t.yourDrawing} data-testid="img-preview" />}
         </div>
         <div className="preview-meta">
           <span className="file-name" data-testid="text-filename">
@@ -110,12 +178,14 @@ export function Setup(props: {
             </label>
           ))}
         </fieldset>
+        <p className="muted small levels-note">{t.levelsNote}</p>
 
         <details className="more">
           <summary data-testid="button-more">
             {t.more} <ChevronDown size={18} aria-hidden="true" className="more-chevron" />
           </summary>
           <div className="more-body">
+            <Target value={o.target} onChange={(v) => set('target', v)} />
             <Segmented<Mode>
               name="mode"
               legend={t.modeTitle}
@@ -123,12 +193,20 @@ export function Setup(props: {
               onChange={(v) => set('mode', v)}
               options={(['auto', 'all', 'outline'] as Mode[]).map((m) => [m, t.modes[m]])}
             />
+            <p className="muted small mode-hint" data-testid="text-mode-hint">{t.modeHint}</p>
+            <Segmented<Strategy>
+              name="strategy"
+              legend={t.strategyTitle}
+              value={o.strategy}
+              onChange={(v) => set('strategy', v)}
+              options={(['auto', 'subject', 'classes', 'components'] as Strategy[]).map((m) => [m, t.strategies[m]])}
+            />
             <Segmented<Numbering>
               name="numbering"
               legend={t.numberingTitle}
               value={o.numbering}
               onChange={(v) => set('numbering', v)}
-              options={(['jumps', 'series'] as Numbering[]).map((m) => [m, t.numberings[m]])}
+              options={(['jumps', 'color', 'series'] as Numbering[]).map((m) => [m, t.numberings[m]])}
             />
             <Segmented<Labels>
               name="labels"
@@ -137,6 +215,7 @@ export function Setup(props: {
               onChange={(v) => set('labels', v)}
               options={(['numbers', 'math'] as Labels[]).map((m) => [m, t.labelsOpts[m]])}
             />
+            {o.labels === 'math' && <MathMax value={o.math_max} onChange={(v) => set('math_max', v)} />}
             <Segmented<Lang>
               name="lang"
               legend={t.pdfLangTitle}

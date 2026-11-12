@@ -9,25 +9,27 @@ import { APP_CONFIG, AppConfig } from '../config.js';
 import { REDIS } from '../redis/redis.module.js';
 import { StorageService } from '../storage/storage.service.js';
 import { CreateJobDto, JobOptions, normalizeOptions } from './create-job.dto.js';
-import { checkEdit, EditJobDto } from './edit-plan.js';
+import { checkEdit, EditJobDto, INK_HEX } from './edit-plan.js';
 import { detectImage } from './file-type.js';
-import { JobView, mapState, parseFailure } from './job-view.js';
+import { JobResultView, JobView, mapState, parseFailure, VariantView } from './job-view.js';
 
 export interface JobData {
   id: string;
-  /** generate: the uploaded image; edit: edit.json with the user's dots */
+  /** generate: the uploaded image; analyze: the uploaded image; edit: edit.json; variant: scene.json */
   input: string;
   options: JobOptions;
   hash?: string;
-  kind?: 'edit';
+  kind?: 'edit' | 'analyze' | 'variant';
   /** the uploaded image (for edit jobs: a copy of the parent's) */
   source?: string;
   parent?: string;
 }
 
 export interface JobResult {
-  files: { pdf: string; puzzle: string; answer: string; plan?: string };
+  files: { pdf?: string; puzzle?: string; answer?: string; plan?: string; scene?: string };
   stats: Record<string, unknown>;
+  /** analyze jobs: the variant jobs the worker enqueued itself */
+  variants?: { id: string; target: number }[];
 }
 
 export const FILES = {
@@ -79,7 +81,7 @@ export class JobsService {
     await this.checkBackpressure();
     const id = randomUUID();
     const input = await this.storage.saveInput(id, ext, file.buffer);
-    const job = await this.enqueue('generate', { id, input, options, hash });
+    const job = await this.enqueue('analyze', { id, kind: 'analyze', input, options, hash });
     await this.redis.set(cacheKey, id, 'EX', this.cfg.resultTtlSec);
     this.log.log(`job ${id} queued (${ext}, ${file.size} bytes, ${JSON.stringify(options)})`);
     return this.view(job);
@@ -95,12 +97,14 @@ export class JobsService {
     const raw = await this.storage.read(planRel);
     if (!raw) throw new ApiError(404, 'NOT_FOUND', 'The drawing has expired');
     const plan = JSON.parse(raw.toString('utf8'));
-    const checked = checkEdit(dto, plan.page);
+    // a sheet made before objects existed has no colours: one black object per line
+    const colors: string[] = plan.colors ?? plan.paths.map(() => INK_HEX);
+    const checked = checkEdit(dto, plan.page, colors.length);
     if (typeof checked === 'string') throw new ApiError(400, 'BAD_PLAN', checked);
 
     await this.checkBackpressure();
     const id = randomUUID();
-    const input = await this.storage.save(id, 'edit.json', JSON.stringify({ ...plan, ...checked }));
+    const input = await this.storage.save(id, 'edit.json', JSON.stringify({ ...plan, v: 2, colors, ...checked }));
     const src = sourceOf(parent.data);
     const source = src ? await this.storage.copy(src, id, path.basename(src)) : null;
     const options: JobOptions = {
@@ -160,7 +164,8 @@ export class JobsService {
       type = meta.type;
     }
     const size = rel ? await this.storage.size(rel) : null;
-    if (!rel || size === null) throw new ApiError(404, 'NOT_FOUND', 'The file has expired');
+    if (!rel) throw new ApiError(404, 'NOT_FOUND', 'This job has no such file');
+    if (size === null) throw new ApiError(404, 'NOT_FOUND', 'The file has expired');
     return { stream: this.storage.open(rel), size, type };
   }
 
@@ -173,17 +178,10 @@ export class JobsService {
       progress: typeof job.progress === 'number' ? job.progress : 0,
       position: status === 'queued' ? await this.position(job.id!) : null,
       createdAt: job.timestamp,
+      ...(job.data.parent && { parent: job.data.parent }),
     };
     if (status === 'done' && job.returnvalue) {
-      const base = `/api/jobs/${job.id}/files`;
-      v.result = {
-        pdf: `${base}/dotdot.pdf`,
-        puzzle: `${base}/puzzle.png`,
-        answer: `${base}/answer.png`,
-        ...(job.returnvalue.files.plan && { plan: `${base}/plan.json` }),
-        ...(sourceOf(job.data) && { source: `${base}/source` }),
-        stats: job.returnvalue.stats,
-      };
+      v.result = await this.resultOf(job);
       v.progress = 100;
       v.finishedAt = job.finishedOn;
     }
@@ -192,6 +190,40 @@ export class JobsService {
       v.finishedAt = job.finishedOn;
     }
     return v;
+  }
+
+  private async resultOf(job: Job<JobData, JobResult>): Promise<JobResultView> {
+    const base = `/api/jobs/${job.id}/files`;
+    const f = job.returnvalue!.files;
+    return {
+      ...(f.pdf && { pdf: `${base}/dotdot.pdf` }),
+      ...(f.puzzle && { puzzle: `${base}/puzzle.png` }),
+      ...(f.answer && { answer: `${base}/answer.png` }),
+      ...(f.plan && { plan: `${base}/plan.json` }),
+      ...(sourceOf(job.data) && { source: `${base}/source` }),
+      stats: job.returnvalue!.stats,
+      ...(job.returnvalue!.variants && { variants: await this.variantViews(job.returnvalue!.variants) }),
+    };
+  }
+
+  /** The set's variants: each is a leaf job, one missing (expired) variant does not break the rest. */
+  private async variantViews(list: { id: string; target: number }[]): Promise<VariantView[]> {
+    return Promise.all(list.map(async ({ id, target }) => {
+      const job = await this.queue.getJob(id);
+      if (!job) {
+        return { id, target, status: 'failed' as const, progress: 0, position: null,
+                 error: { code: 'NOT_FOUND' as const, message: 'The variant has expired' } };
+      }
+      const status = mapState(await job.getState());
+      const v: VariantView = {
+        id, target, status,
+        progress: typeof job.progress === 'number' ? job.progress : 0,
+        position: status === 'queued' ? await this.position(id) : null,
+      };
+      if (status === 'done' && job.returnvalue) v.result = await this.resultOf(job);
+      if (status === 'failed') v.error = parseFailure(job.failedReason);
+      return v;
+    }));
   }
 
   /** Place in line: BullMQ LPUSHes new jobs to "wait" and workers take from the tail. */

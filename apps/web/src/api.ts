@@ -1,43 +1,77 @@
 import type { Draft, PlanDoc } from './editor/model';
 
 export type Mode = 'auto' | 'all' | 'outline';
-export type Numbering = 'jumps' | 'series';
+export type Strategy = 'auto' | 'subject' | 'classes' | 'components';
+export type Numbering = 'jumps' | 'color' | 'series';
 export type Level = 'kid' | 'school' | 'adult';
 export type Labels = 'numbers' | 'math';
 export type Lang = 'ru' | 'en';
 
 export interface JobOptions {
   mode: Mode;
+  strategy: Strategy;
   numbering: Numbering;
   level: Level;
   labels: Labels;
   lang: Lang;
+  /** biggest answer in math mode */
+  math_max: number;
+  /** approximate dot count; absent = the ladder picked for the level */
+  target?: number;
 }
 
 export type JobStatus = 'queued' | 'processing' | 'done' | 'failed';
+
+export interface JobStats {
+  dots?: number;
+  strokes?: number;
+  contours?: number;
+  plain_lines?: number;
+  ms?: number;
+  edited?: boolean;
+  /** the grouping strategy actually used (options.strategy may be 'auto') */
+  strategy?: Strategy;
+  /** an analyzed set: the dot counts the drawing can actually carry */
+  dots_min?: number;
+  dots_max?: number;
+  targets?: number[];
+  /** a variant: the dot count it aimed at */
+  target?: number;
+  options?: Partial<JobOptions>;
+}
+
+export interface JobResultView {
+  pdf?: string;
+  puzzle?: string;
+  answer?: string;
+  /** plan.json for the dot editor (missing for sheets made before the editor) */
+  plan?: string;
+  /** the uploaded drawing, shown faintly under the dots while editing */
+  source?: string;
+  stats: JobStats;
+  /** an analyzed set: the dot-count variants to choose from */
+  variants?: VariantView[];
+}
+
+/** One dot-count variant of an analyzed drawing: a leaf job with its own sheet. */
+export interface VariantView {
+  id: string;
+  target: number;
+  status: JobStatus;
+  progress: number;
+  position: number | null;
+  result?: JobResultView;
+  error?: { code: string; message: string };
+}
 
 export interface JobView {
   id: string;
   status: JobStatus;
   progress: number;
   position: number | null;
-  result?: {
-    pdf: string;
-    puzzle: string;
-    answer: string;
-    /** plan.json for the dot editor (missing for sheets made before the editor) */
-    plan?: string;
-    /** the uploaded drawing, shown faintly under the dots while editing */
-    source?: string;
-    stats: {
-      dots?: number;
-      strokes?: number;
-      plain_lines?: number;
-      ms?: number;
-      edited?: boolean;
-      options?: Partial<JobOptions>;
-    };
-  };
+  /** the set a variant belongs to, or the sheet an edit was made from */
+  parent?: string;
+  result?: JobResultView;
   error?: { code: string; message: string };
   createdAt: number;
   finishedAt?: number;
@@ -89,24 +123,37 @@ export const getConfig = () => request<PublicConfig>('/api/config');
 export function createJob(file: Blob, options: JobOptions, filename = 'drawing.png') {
   const form = new FormData();
   form.append('file', file, filename);
-  for (const [k, v] of Object.entries(options)) form.append(k, v);
+  for (const [k, v] of Object.entries(options)) if (v !== undefined) form.append(k, String(v));
   return request<JobView>('/api/jobs', { method: 'POST', body: form });
 }
 
 export const getPlan = (path: string) => request<PlanDoc>(path);
 
-/** A new sheet from edited dots; page geometry and plain lines stay on the server. */
+/** A new sheet from edited dots; page geometry, colours and plain lines stay on the server. */
 export function editJob(id: string, draft: Draft) {
   return request<JobView>(`/api/jobs/${encodeURIComponent(id)}/edit`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ dots: draft.dots, paths: draft.paths }),
+    body: JSON.stringify({ dots: draft.dots, paths: draft.paths, groups: draft.groups }),
   });
 }
 
 export const getJob = (id: string) => request<JobView>(`/api/jobs/${encodeURIComponent(id)}`);
 
-export const isFinal = (v: JobView) => v.status === 'done' || v.status === 'failed';
+/** A set is final only when every variant is, so the live stream stays open until then. */
+export const isFinal = (v: JobView) =>
+  v.status === 'failed' || (v.status === 'done' && (!v.result?.variants || v.result.variants.every((x) => x.status === 'done' || x.status === 'failed')));
+
+/** The set behind a sheet: a variant points at it directly, an edit points at the sheet it was made from. */
+export async function findSetId(id: string): Promise<string | null> {
+  for (let hop = 0; hop < 5; hop++) {
+    const v = await getJob(id);
+    if (v.result?.variants) return v.id;
+    if (!v.parent) return null;
+    id = v.parent;
+  }
+  return null;
+}
 
 /**
  * Live job updates: server-sent events first, polling as a fallback

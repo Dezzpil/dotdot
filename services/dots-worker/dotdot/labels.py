@@ -21,6 +21,7 @@ class Placed:
     h: float
     text: str
     dot: int
+    group: int = 0
 
 
 class CostMap:
@@ -67,6 +68,7 @@ def place_labels(plan: Plan, ctx: cairo.Context, font_size: float, dot_r: float,
     lay_dots = np.zeros(shape, np.uint8)
     lay_segs = np.zeros(shape, np.uint8)
     lay_lines = np.zeros(shape, np.uint8)
+    lay_solids = np.zeros(shape, np.uint8)
     g = GRID
     for d in plan.dots:
         cv2.circle(lay_dots, (int(d.xy[0] * g), int(d.xy[1] * g)), int((dot_r + 1.2) * g), 1, -1)
@@ -75,7 +77,9 @@ def place_labels(plan: Plan, ctx: cairo.Context, font_size: float, dot_r: float,
         cv2.polylines(lay_segs, [pts], False, 1, max(1, int(1.2 * g)))
     for line in plan.lines:
         cv2.polylines(lay_lines, [np.round(line * g).astype(np.int32)], False, 1, max(1, int(1.6 * g)))
-    cm.a += lay_dots * 400.0 + lay_lines * 30.0 + lay_segs * 6.0
+    for poly in plan.solids:
+        cv2.fillPoly(lay_solids, [np.round(poly * g).astype(np.int32)], 1)
+    cm.a += lay_dots * 400.0 + lay_solids * 200.0 + lay_lines * 30.0 + lay_segs * 6.0
 
     ctx.set_font_size(font_size)
     asc, desc, _, _, _ = ctx.font_extents()
@@ -85,14 +89,14 @@ def place_labels(plan: Plan, ctx: cairo.Context, font_size: float, dot_r: float,
     angles = [math.radians(a) for a in range(0, 360, 15)]
     gaps = (dot_r + 0.8, dot_r + 2.5, dot_r + 5.0, dot_r + 8.0)
 
-    # one label per dot when several numbers share it ("31/144"); math stays separate
-    items: list[tuple[int, str]] = []
+    # one label per dot when several numbers share it ("31/144"); math and colours stay separate
+    items: list[tuple[int, str, int]] = []
     for di, d in enumerate(plan.dots):
-        texts = [plan.seq[q].text for q in d.labels]
-        if combine and len(texts) > 1:
-            items.append((di, "/".join(texts)))
+        pairs = [(plan.seq[q].text, plan.seq[q].group) for q in d.labels]
+        if combine and len(pairs) > 1:
+            items.append((di, "/".join(t for t, _ in pairs), pairs[0][1]))
         else:
-            items += [(di, t) for t in texts]
+            items += [(di, t, gi) for t, gi in pairs]
 
     def away_dir(di: int) -> np.ndarray:
         nb = []
@@ -144,11 +148,11 @@ def place_labels(plan: Plan, ctx: cairo.Context, font_size: float, dot_r: float,
     rects: dict[int, tuple] = {}
     costs: dict[int, float] = {}
     widths = {i: ctx.text_extents(items[i][1]).x_advance for i in range(len(items))}
-    aways = {di: away_dir(di) for di in {d for d, _ in items}}
+    aways = {di: away_dir(di) for di, _, _ in items}
     LABEL_W = 500.0
 
     def put(i):
-        di, _ = items[i]
+        di = items[i][0]
         r, c = best_spot(di, widths[i], aways[di])
         if r is None:
             x0, y0 = plan.dots[di].xy[0] + dot_r + 1, plan.dots[di].xy[1] - th / 2
@@ -166,4 +170,5 @@ def place_labels(plan: Plan, ctx: cairo.Context, font_size: float, dot_r: float,
             cm.add_rect(r[0] - 0.8, r[1] - 0.8, r[2] + 0.8, r[3] + 0.8, -LABEL_W)
             put(i)
 
-    return [Placed(r[0], r[3] - 0.4, widths[i], th, items[i][1], items[i][0]) for i, r in rects.items()]
+    return [Placed(r[0], r[3] - 0.4, widths[i], th, items[i][1], items[i][0], items[i][2])
+            for i, r in rects.items()]

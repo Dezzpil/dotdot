@@ -20,9 +20,12 @@ TEXTS = {
         "answer": "Ответ — так должно получиться",
         "hint_numbers": "Веди линию от 1 к 2, потом к 3 и дальше, пока не появится картинка.",
         "hint_math": "Реши пример у точки — ответ подскажет её номер. Соединяй точки по порядку.",
-        "hint_series": "Каждая буква — отдельная линия: A1 → A2 → …, затем B1 → B2 → …",
+        "hint_series": "Каждая буква — отдельный контур: A1 → A2 → …, затем B1 → B2 → …",
+        "hint_color": "Каждый цвет — отдельный контур: точки внутри него начинаются с 1.",
+        "note_printed": "Часть рисунка уже напечатана линиями — соединяй только точки.",
         "legend_jump": "кружок вокруг точки — начни здесь новую линию (оторви карандаш)",
         "legend_series": "кружок — первая точка линии",
+        "legend_color": "каждый цвет — отдельный контур, точки внутри него с 1; кружок — новая линия",
         "footer": "dotdot · сделано с радостью",
         "stats": "точек: {n}",
     },
@@ -31,13 +34,35 @@ TEXTS = {
         "answer": "Answer key — here is what you should get",
         "hint_numbers": "Draw a line from 1 to 2, then to 3 and so on until the picture appears.",
         "hint_math": "Solve the example next to each dot to find its number, then connect in order.",
-        "hint_series": "Each letter is a separate line: A1 → A2 → …, then B1 → B2 → …",
+        "hint_series": "Each letter is a separate contour: A1 → A2 → …, then B1 → B2 → …",
+        "hint_color": "Each colour is a separate contour: its numbers start at 1.",
+        "note_printed": "Part of the drawing is pre-printed as lines — connect only the dots.",
         "legend_jump": "ring around a dot — start a new line here (lift your pencil)",
         "legend_series": "ring — the first dot of a line",
+        "legend_color": "each colour is a separate contour, numbered from 1; ring — start a new line",
         "footer": "dotdot · made with joy",
         "stats": "dots: {n}",
     },
 }
+
+
+def _rgb(hex_color: str) -> tuple[float, float, float]:
+    v = hex_color.lstrip("#")
+    r, g, b = (int(v[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    return r, g, b
+
+
+def _colored(plan: Plan, opts) -> bool:
+    """One object needs no colour: it is just 1…N in black."""
+    return opts.numbering == "color" and len(set(plan.groups)) > 1
+
+
+def _dot_group(plan: Plan, di: int) -> int:
+    return plan.groups[plan.seq[plan.dots[di].labels[0]].series]
+
+
+def _dot_rgb(plan: Plan, di: int, colored: bool):
+    return _rgb(plan.colors[_dot_group(plan, di)]) if colored else INK
 
 
 class Layout:
@@ -94,7 +119,7 @@ def _mascot(ctx, x, y, r):
     ctx.stroke()
 
 
-def _header(ctx, L: Layout, title: str, hint: str):
+def _header(ctx, L: Layout, title: str, hint: str, note: str = ""):
     _mascot(ctx, L.margin + 9, L.margin + 6, 9)
     ctx.set_source_rgb(*INK)
     _font(ctx, 17, True)
@@ -102,6 +127,9 @@ def _header(ctx, L: Layout, title: str, hint: str):
     ctx.set_source_rgb(*MUTED)
     _font(ctx, 9)
     _centered(ctx, hint, L.w / 2, L.margin + 28)
+    if note:
+        _font(ctx, 8.5)
+        _centered(ctx, note, L.w / 2, L.margin + 40)
 
 
 def _footer(ctx, L: Layout, left: str, right: str, ring: bool):
@@ -137,16 +165,32 @@ def _lines(ctx, plan: Plan, width: float):
         ctx.stroke()
 
 
+def _solids(ctx, plan: Plan):
+    """Filled areas print as ink on both sheets: a pupil is not a row of dots."""
+    if not plan.solids:
+        return
+    ctx.set_source_rgb(*INK)
+    for poly in plan.solids:
+        ctx.move_to(*poly[0])
+        for p in poly[1:]:
+            ctx.line_to(*p)
+        ctx.close_path()
+        ctx.fill()
+
+
 def draw_puzzle(ctx, L: Layout, plan: Plan, placed: list[Placed], opts, font_size, dot_r):
     t = TEXTS[opts.lang]
+    colored = _colored(plan, opts)
     hint = t["hint_series"] if opts.numbering == "series" else (
-        t["hint_math"] if opts.labels == "math" else t["hint_numbers"])
-    _header(ctx, L, t["title"], hint)
+        t["hint_math"] if opts.labels == "math" else (t["hint_color"] if colored else t["hint_numbers"]))
+    _header(ctx, L, t["title"], hint, t["note_printed"] if plan.lines else "")
+    _solids(ctx, plan)
     _lines(ctx, plan, 1.3)
     starts = {plan.seq[p[0]].dot for p in plan.paths}
     multi = len(plan.paths) > 1
-    ctx.set_source_rgb(*INK)
     for i, d in enumerate(plan.dots):
+        rgb = _dot_rgb(plan, i, colored)
+        ctx.set_source_rgb(*rgb)
         ctx.arc(d.xy[0], d.xy[1], dot_r, 0, 2 * np.pi)
         ctx.fill()
         if multi and i in starts:
@@ -155,28 +199,36 @@ def draw_puzzle(ctx, L: Layout, plan: Plan, placed: list[Placed], opts, font_siz
             ctx.stroke()
     _font(ctx, font_size)
     for p in placed:
+        ctx.set_source_rgb(*(_rgb(plan.colors[p.group]) if colored else INK))
         ctx.move_to(p.x, p.y)
         ctx.show_text(p.text)
-    legend = (t["legend_series"] if opts.numbering == "series" else t["legend_jump"]) if multi else t["stats"].format(n=len(plan.dots))
+    if not multi:
+        legend = t["stats"].format(n=len(plan.dots))
+    elif opts.numbering == "series":
+        legend = t["legend_series"]
+    else:
+        legend = t["legend_color"] if colored else t["legend_jump"]
     _footer(ctx, L, legend, t["footer"], ring=multi)
 
 
 def draw_answer(ctx, L: Layout, plan: Plan, opts, dot_r):
     t = TEXTS[opts.lang]
+    colored = _colored(plan, opts)
     _header(ctx, L, t["answer"], "")
+    _solids(ctx, plan)
     _lines(ctx, plan, 1.3)
-    ctx.set_source_rgb(*ACCENT)
     ctx.set_line_width(1.5)
     ctx.set_line_cap(cairo.LINE_CAP_ROUND)
     ctx.set_line_join(cairo.LINE_JOIN_ROUND)
-    for path in plan.paths:
+    for si, path in enumerate(plan.paths):
+        ctx.set_source_rgb(*(_rgb(plan.colors[plan.groups[si]]) if colored else ACCENT))
         xy = [plan.dots[plan.seq[i].dot].xy for i in path]
         ctx.move_to(*xy[0])
         for p in xy[1:]:
             ctx.line_to(*p)
         ctx.stroke()
-    ctx.set_source_rgb(*INK)
-    for d in plan.dots:
+    for i, d in enumerate(plan.dots):
+        ctx.set_source_rgb(*_dot_rgb(plan, i, colored))
         ctx.arc(d.xy[0], d.xy[1], dot_r * 0.8, 0, 2 * np.pi)
         ctx.fill()
     _footer(ctx, L, t["stats"].format(n=len(plan.dots)), t["footer"], ring=False)

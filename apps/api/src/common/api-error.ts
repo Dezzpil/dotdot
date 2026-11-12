@@ -8,6 +8,7 @@ export type ErrorCode =
   | 'BAD_OPTIONS'
   | 'BAD_IMAGE'
   | 'BAD_PLAN'
+  | 'BAD_SCENE'
   | 'BUSY'
   | 'RATE_LIMITED'
   | 'NOT_FOUND'

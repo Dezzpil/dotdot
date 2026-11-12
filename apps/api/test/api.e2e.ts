@@ -62,6 +62,18 @@ describe('DotDot API', () => {
   let worker: ChildProcess;
   let sample: Buffer;
 
+  /** Upload and wait for the whole set: the SSE stream ends only when every variant is final. */
+  async function sheet(base: string, fields: Record<string, string> = {}) {
+    const up = await upload(base, sample, fields);
+    expect(up.status).toBe(202);
+    const set = (await events(base, up.body.id)).at(-1);
+    expect(set.status).toBe('done');
+    const variants = set.result.variants as any[];
+    expect(variants.length).toBeGreaterThanOrEqual(1);
+    expect(variants.every((v) => v.status === 'done' || v.status === 'failed')).toBe(true);
+    return { up, set, variant: variants[0] };
+  }
+
   beforeAll(async () => {
     dir = await mkdtemp(path.join(tmpdir(), 'dotdot-e2e-'));
     sample = await readFile(SAMPLE);
@@ -87,29 +99,53 @@ describe('DotDot API', () => {
     expect(c.limits.maxUploadMb).toBe(10);
   });
 
-  it('turns a drawing into a PDF: upload -> SSE -> files -> cache hit', async () => {
-    const up = await upload(s.base, sample, { level: 'kid', lang: 'en' });
-    expect(up.status).toBe(202);
-    expect(up.body.status).toBe('queued');
-    const evs = await events(s.base, up.body.id);
-    const last = evs.at(-1);
-    expect(last.status).toBe('done');
-    expect(last.result.stats.options).toMatchObject({ mode: 'outline', level: 'kid', lang: 'en' });
-    expect(last.result.stats.strokes).toBe(1);
+  it('turns a drawing into a set of variants: upload -> SSE -> files -> cache hit', async () => {
+    const { up, set, variant } = await sheet(s.base, { level: 'kid', lang: 'en' });
+    expect(set.result.stats.contours).toBeGreaterThanOrEqual(1);
+    expect(set.result.stats.dots_min).toBeLessThanOrEqual(set.result.stats.dots_max);
+    const targets = set.result.variants.map((v: any) => v.target);
+    expect(targets).toEqual([...new Set(targets)].sort((a, b) => a - b));
+    expect(variant.result.stats.options).toMatchObject({ mode: 'outline', level: 'kid', lang: 'en' });
+    expect(variant.result.stats.strokes).toBe(1);
+    expect(variant.result.stats.dots).toBeLessThanOrEqual(variant.target);
 
-    const pdf = await fetch(`${s.base}${last.result.pdf}`);
+    const pdf = await fetch(`${s.base}${variant.result.pdf}`);
     expect(pdf.status).toBe(200);
     expect(pdf.headers.get('content-type')).toBe('application/pdf');
     expect(pdf.headers.get('content-disposition')).toContain('dotdot.pdf');
     expect(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString()).toBe('%PDF-');
-    const png = await fetch(`${s.base}${last.result.puzzle}`);
+    const png = await fetch(`${s.base}${variant.result.puzzle}`);
     expect(png.headers.get('content-type')).toBe('image/png');
+    // the set itself has no sheet of its own
+    expect((await fetch(`${s.base}/api/jobs/${up.body.id}/files/dotdot.pdf`)).status).toBe(404);
 
     const again = await upload(s.base, sample, { level: 'kid', lang: 'en' });
     expect(again.body.id).toBe(up.body.id);
     expect(again.body.status).toBe('done');
+    expect(again.body.result.variants.every((v: any) => v.status === 'done')).toBe(true);
     const other = await upload(s.base, sample, { level: 'kid', lang: 'ru' });
     expect(other.body.id).not.toBe(up.body.id);
+  });
+
+  it('passes the grouping strategy to the worker and keys the cache on it', async () => {
+    const one = await sheet(s.base, { level: 'school', strategy: 'subject' });
+    expect(one.set.result.stats.strategy).toBe('subject');
+    expect(one.variant.result.stats.options).toMatchObject({ strategy: 'subject' });
+    const many = await sheet(s.base, { level: 'school', strategy: 'components' });
+    expect(many.set.result.stats.strategy).toBe('components');
+    expect(many.up.body.id).not.toBe(one.up.body.id);
+    const again = await upload(s.base, sample, { level: 'school', strategy: 'subject' });
+    expect(again.body.id).toBe(one.up.body.id);
+  });
+
+  it('centres three variants on the user\'s own dot count', async () => {
+    const { set, variant } = await sheet(s.base, { level: 'school', target: '100' });
+    expect(set.result.variants.map((v: any) => v.target)).toEqual([80, 100, 125]);
+    expect(variant.result.stats.target).toBe(80);
+    const view = (await (await fetch(`${s.base}/api/jobs/${variant.id}`)).json()) as any;
+    expect(view.parent).toBe(set.id);
+    expect((await upload(s.base, sample, { target: '9' })).status).toBe(400);
+    expect((await upload(s.base, sample, { target: '1001' })).status).toBe(400);
   });
 
   it('explains what is wrong with a bad request', async () => {
@@ -191,10 +227,9 @@ describe('DotDot API', () => {
   });
 
   it('edits dots: plan.json -> POST edit -> a new sheet from the same drawing', async () => {
-    const up = await upload(s.base, sample, { level: 'school', lang: 'ru' });
-    const done = (await events(s.base, up.body.id)).at(-1);
-    expect(done.status).toBe('done');
-    expect(done.result.plan).toBe(`/api/jobs/${up.body.id}/files/plan.json`);
+    const { variant } = await sheet(s.base, { level: 'school', lang: 'ru' });
+    const done = variant;
+    expect(done.result.plan).toBe(`/api/jobs/${done.id}/files/plan.json`);
     const src = await fetch(`${s.base}${done.result.source}`);
     expect(src.headers.get('content-type')).toBe('image/png');
     const plan = (await (await fetch(`${s.base}${done.result.plan}`)).json()) as any;
@@ -203,16 +238,17 @@ describe('DotDot API', () => {
     // move one dot, drop the last line, switch the sheet to English
     plan.dots[0][0] += 10;
     const paths = plan.paths.slice(0, -1);
+    const groups = plan.groups.slice(0, -1);
     const post = (body: unknown) =>
-      fetch(`${s.base}/api/jobs/${up.body.id}/edit`, {
+      fetch(`${s.base}/api/jobs/${done.id}/edit`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-forwarded-for': ip() },
         body: JSON.stringify(body),
       });
-    const r = await post({ dots: plan.dots, paths, lang: 'en' });
+    const r = await post({ dots: plan.dots, paths, groups, lang: 'en' });
     expect(r.status).toBe(202);
     const job = (await r.json()) as any;
-    expect(job.id).not.toBe(up.body.id);
+    expect(job.id).not.toBe(done.id);
     const edited = (await events(s.base, job.id)).at(-1);
     expect(edited.status).toBe('done');
     expect(edited.result.stats.edited).toBe(true);
@@ -222,20 +258,47 @@ describe('DotDot API', () => {
     expect((await fetch(`${s.base}${edited.result.source}`)).status).toBe(200);
     const again = (await (await fetch(`${s.base}${edited.result.plan}`)).json()) as any;
     expect(again.lines).toEqual(plan.lines); // plain lines come from the parent, not from the client
+    expect(again.v).toBe(2);
+    expect(again.groups).toEqual(groups);
+    expect(again.colors).toEqual(plan.colors);
 
     // broken edits are refused before they reach the queue
-    let bad = await post({ dots: [[1e6, 0]], paths: [[0, 0]] });
+    let bad = await post({ dots: [[1e6, 0]], paths: [[0, 0]], groups: [0] });
     expect(bad.status).toBe(400);
     expect(((await bad.json()) as any).error.code).toBe('BAD_PLAN');
-    bad = await post({ dots: plan.dots, paths: [[0, 99999]] });
+    bad = await post({ dots: plan.dots, paths: [[0, 99999]], groups: [0] });
     expect(((await bad.json()) as any).error.code).toBe('BAD_PLAN');
-    bad = await post({ dots: plan.dots, paths, lines: [] });
+    bad = await post({ dots: plan.dots, paths, groups: [99] });
+    expect(((await bad.json()) as any).error.code).toBe('BAD_PLAN');
+    bad = await post({ dots: plan.dots, paths, groups, lines: [] });
     expect(bad.status).toBe(400); // unknown fields are rejected
     bad = await fetch(`${s.base}/api/jobs/${randomUUID()}/edit`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ dots: [], paths: [] }),
+      body: JSON.stringify({ dots: [], paths: [], groups: [] }),
     });
     expect(bad.status).toBe(404);
+  });
+
+  it('numbers contours by colour and caps math answers', async () => {
+    const { set, variant } = await sheet(s.base, { level: 'school', labels: 'math', math_max: '25' });
+    expect(set.result.stats.options).toMatchObject({ numbering: 'color', labels: 'math', math_max: 25 });
+    expect(set.result.stats.contours).toBeGreaterThanOrEqual(1);
+    for (const v of set.result.variants) {
+      const plan = (await (await fetch(`${s.base}${v.result.plan}`)).json()) as any;
+      expect(plan.v).toBe(2);
+      expect(plan.groups.length).toBe(plan.paths.length);
+      const perGroup = new Map<number, number>();
+      plan.paths.forEach((p: number[], i: number) => perGroup.set(plan.groups[i], (perGroup.get(plan.groups[i]) ?? 0) + p.length));
+      expect(Math.max(...perGroup.values())).toBeLessThanOrEqual(25);
+    }
+    expect(variant.result.stats.contours).toBe(set.result.stats.contours);
+
+    for (const math_max of ['9', '1000', 'abc']) {
+      const bad = await upload(s.base, sample, { labels: 'math', math_max });
+      expect(bad.status).toBe(400);
+      expect(bad.body.error.code).toBe('BAD_OPTIONS');
+    }
+    expect((await upload(s.base, sample, { numbering: 'rainbow' })).status).toBe(400);
   });
 });

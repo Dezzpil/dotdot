@@ -9,7 +9,7 @@ SAMPLE = pathlib.Path(__file__).parent.parent / "samples" / "among-us.png"
 
 
 @pytest.mark.parametrize("mode", ["auto", "all", "outline"])
-@pytest.mark.parametrize("numbering", ["jumps", "series"])
+@pytest.mark.parametrize("numbering", ["jumps", "color", "series"])
 @pytest.mark.parametrize("level", ["kid", "school", "adult"])
 @pytest.mark.parametrize("labels", ["numbers", "math"])
 def test_generate_all_options(mode, numbering, level, labels):

@@ -23,6 +23,7 @@ export async function createApp(cfg: AppConfig = loadConfig()): Promise<INestApp
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
+      transform: true, // multipart fields arrive as text: math_max needs @Type(() => Number)
       exceptionFactory: (errors) =>
         new ApiError(
           400,

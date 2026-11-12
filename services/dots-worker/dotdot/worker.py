@@ -3,10 +3,13 @@
 Job data (written by the API):
     {"id": "<job id>", "input": "<id>/input.png", "options": {...}}                     # new drawing
     {"id": "<job id>", "kind": "edit", "input": "<id>/edit.json", "options": {...}}     # edited dots
+Analyze jobs (kind "analyze") write <id>/scene.json and enqueue the dot-count variants
+themselves; variant jobs (kind "variant") read the scene and render without image analysis.
 Return value (read by the API):
     {"files": {"pdf": "<id>/dotdot.pdf", "puzzle": "<id>/puzzle.png", "answer": "<id>/answer.png",
                "plan": "<id>/plan.json"},
      "stats": {...}}
+Analyze jobs return {"files": {"scene": ...}, "stats": {...}, "variants": [{"id", "target"}]}.
 Errors are raised as "CODE: message" so the API can show a friendly text.
 """
 from __future__ import annotations
@@ -18,13 +21,17 @@ import os
 import pathlib
 import signal
 import time
+import uuid
+from dataclasses import asdict
 
 import cv2
-from bullmq import UnrecoverableError, Worker
+from bullmq import Queue, UnrecoverableError, Worker
 
-from .pipeline import BadOptionsError, Options, generate, render_edited
+from .pipeline import (BadOptionsError, Options, analyze, default_target, generate, ladder_targets,
+                       render_edited, render_scene)
 from .plan_io import BadPlanError
 from .preprocess import BadImageError
+from .scene import BadSceneError, scene_from_json, scene_to_json
 
 log = logging.getLogger("dotdot.worker")
 
@@ -34,6 +41,8 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 STORAGE_DIR = pathlib.Path(os.environ.get("STORAGE_DIR", "/data"))
 CONCURRENCY = int(os.environ.get("WORKER_CONCURRENCY", "1"))
 JOB_TIMEOUT = float(os.environ.get("JOB_TIMEOUT_SEC", "60"))
+JOB_ATTEMPTS = int(os.environ.get("JOB_ATTEMPTS", "2"))
+RESULT_TTL = int(os.environ.get("RESULT_TTL_SEC", str(24 * 3600)))
 
 
 def redis_url(url: str) -> str:
@@ -61,6 +70,26 @@ def _write(path: pathlib.Path, data: bytes) -> None:
     tmp.replace(path)  # atomic: the API never sees half-written files
 
 
+async def enqueue_variants(set_id: str, data: dict, opts: Options, targets: list[int]) -> list[dict]:
+    """The analyze job owns its variants: one analysis, no duplicate work per dot count."""
+    queue = Queue(QUEUE, {"connection": redis_url(REDIS_URL), "prefix": PREFIX})
+    variants = []
+    try:
+        for target in targets:
+            vid = str(uuid.uuid4())
+            await queue.add("variant", {
+                "id": vid, "kind": "variant", "input": f"{set_id}/scene.json",
+                "source": data.get("source") or data["input"], "parent": set_id,
+                "options": {**asdict(opts), "target": target},
+            }, {"jobId": vid, "attempts": JOB_ATTEMPTS,
+                "backoff": {"type": "exponential", "delay": 2000},
+                "removeOnComplete": {"age": RESULT_TTL}, "removeOnFail": {"age": RESULT_TTL}})
+            variants.append({"id": vid, "target": target})
+    finally:
+        await queue.close()
+    return variants
+
+
 async def process(job, token):
     t0 = time.perf_counter()
     data = job.data if isinstance(job.data, dict) else json.loads(job.data)
@@ -73,17 +102,27 @@ async def process(job, token):
         opts.validate()
     except (BadOptionsError, TypeError) as e:
         raise UnrecoverableError(f"BAD_OPTIONS: {e}")
-    log.debug("job %s: start", job_id)
+    kind = data.get("kind")
+    log.debug("job %s: start (%s)", job_id, kind or "generate")
     await job.updateProgress(10)
     log.debug("job %s: progress 10 saved", job_id)
     raw = await asyncio.to_thread(src.read_bytes)
-    run = render_edited if data.get("kind") == "edit" else generate
     try:
-        res = await asyncio.wait_for(asyncio.to_thread(run, raw, opts), JOB_TIMEOUT)
+        if kind == "analyze":
+            res = await asyncio.wait_for(asyncio.to_thread(analyze, raw, opts), JOB_TIMEOUT)
+        elif kind == "variant":
+            scene = await asyncio.to_thread(scene_from_json, raw)
+            run = lambda: render_scene(scene, opts, opts.target or default_target(opts))  # noqa: E731
+            res = await asyncio.wait_for(asyncio.to_thread(run), JOB_TIMEOUT)
+        else:
+            run = render_edited if kind == "edit" else generate
+            res = await asyncio.wait_for(asyncio.to_thread(run, raw, opts), JOB_TIMEOUT)
     except BadImageError as e:
         raise UnrecoverableError(f"BAD_IMAGE: {e}")
     except BadPlanError as e:
         raise UnrecoverableError(f"BAD_PLAN: {e}")
+    except BadSceneError as e:
+        raise UnrecoverableError(f"BAD_SCENE: {e}")
     except asyncio.TimeoutError:
         raise UnrecoverableError("TIMEOUT: drawing is too complex")
     log.debug("job %s: generated", job_id)
@@ -91,6 +130,20 @@ async def process(job, token):
     log.debug("job %s: progress 90 saved", job_id)
     out = _safe_path(job_id)
     out.mkdir(parents=True, exist_ok=True)
+    if kind == "analyze":
+        await asyncio.to_thread(_write, out / "scene.json", scene_to_json(res))
+        targets = ladder_targets(res, opts)
+        variants = await enqueue_variants(job_id, data, opts, targets)
+        await job.updateProgress(100)
+        log.info("job %s analyzed in %.0f ms: %d contours, dots %d..%d, %d variants",
+                 job_id, (time.perf_counter() - t0) * 1000, len(res.colors),
+                 res.dots_min, res.dots_max, len(variants))
+        return {"files": {"scene": f"{job_id}/scene.json"},
+                "stats": {"contours": len(res.colors), "dots_min": res.dots_min, "dots_max": res.dots_max,
+                          "targets": targets, "ms": round((time.perf_counter() - t0) * 1000),
+                          "strategy": res.extra.get("strategy"), "features": res.extra.get("features"),
+                          "options": asdict(opts)},
+                "variants": variants}
     files = {"pdf": "dotdot.pdf", "puzzle": "puzzle.png", "answer": "answer.png", "plan": "plan.json"}
     blobs = {"pdf": res.pdf, "puzzle": res.preview_puzzle, "answer": res.preview_answer, "plan": res.plan}
     for k, name in files.items():

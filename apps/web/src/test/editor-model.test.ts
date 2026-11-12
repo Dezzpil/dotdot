@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   canStartAt,
   cutSegment,
+  draftOf,
+  INK_HEX,
   isClosed,
   mergeDots,
+  planColors,
   Pt,
   unmergeDot,
   visits,
   deleteDot,
+  dotLabelRuns,
   dotLabels,
   Draft,
   history,
@@ -33,6 +37,7 @@ const d: Draft = {
     [0, 1, 2, 3, 0],
     [4, 5],
   ],
+  groups: [0, 1],
 };
 
 describe('editor model', () => {
@@ -93,7 +98,7 @@ describe('editor model', () => {
       [4, 5],
       [0, 1, 2, 3, 0],
     ]);
-    const mid: Draft = { dots: d.dots, paths: [[0, 1, 2]] };
+    const mid: Draft = { dots: d.dots, paths: [[0, 1, 2]], groups: [0] };
     expect(canStartAt(mid, 1)).toBe(false);
   });
 
@@ -116,7 +121,7 @@ describe('merge, cut, unmerge', () => {
 
   it('joins the ends of two open lines into one line', () => {
     // line A: 0-1-2, line B: 3-4-5; merge 2 into 3
-    const d: Draft = { dots: pt(6), paths: [[0, 1, 2], [3, 4, 5]] };
+    const d: Draft = { dots: pt(6), paths: [[0, 1, 2], [3, 4, 5]], groups: [0, 1] };
     const { draft, kind } = mergeDots(d, 2, 3);
     expect(kind).toBe('joined');
     expect(draft.dots).toHaveLength(5);
@@ -125,7 +130,7 @@ describe('merge, cut, unmerge', () => {
   });
 
   it('flips lines so that the merged ends meet', () => {
-    const d: Draft = { dots: pt(6), paths: [[0, 1, 2], [3, 4, 5]] };
+    const d: Draft = { dots: pt(6), paths: [[0, 1, 2], [3, 4, 5]], groups: [0, 1] };
     // start of A (dot 0) into the end of B (dot 5): 2-1 then 5-4-3
     const { draft, kind } = mergeDots(d, 0, 5);
     expect(kind).toBe('joined');
@@ -134,7 +139,7 @@ describe('merge, cut, unmerge', () => {
   });
 
   it('closes a line when its two ends merge', () => {
-    const d: Draft = { dots: pt(4), paths: [[0, 1, 2, 3]] };
+    const d: Draft = { dots: pt(4), paths: [[0, 1, 2, 3]], groups: [0] };
     const { draft, kind } = mergeDots(d, 3, 0);
     expect(kind).toBe('closed');
     expect(draft.paths).toEqual([[0, 1, 2, 0]]);
@@ -142,14 +147,14 @@ describe('merge, cut, unmerge', () => {
   });
 
   it('merges neighbours inside a line without leaving a double dot', () => {
-    const d: Draft = { dots: pt(4), paths: [[0, 1, 2, 3]] };
+    const d: Draft = { dots: pt(4), paths: [[0, 1, 2, 3]], groups: [0] };
     const { draft, kind } = mergeDots(d, 1, 2);
     expect(kind).toBe('merged');
     expect(draft.paths).toEqual([[0, 1, 2]]);
   });
 
   it('a merged middle dot gets two numbers and can be split again', () => {
-    const d: Draft = { dots: pt(6), paths: [[0, 1, 2], [3, 4, 5]] };
+    const d: Draft = { dots: pt(6), paths: [[0, 1, 2], [3, 4, 5]], groups: [0, 1] };
     const { draft } = mergeDots(d, 1, 4); // middles: no joining
     expect(draft.paths).toEqual([[0, 3, 1], [2, 3, 4]]);
     expect(visits(draft, 3)).toBe(2);
@@ -161,29 +166,65 @@ describe('merge, cut, unmerge', () => {
   });
 
   it('unmerge keeps a loop closed', () => {
-    const d: Draft = { dots: pt(5), paths: [[0, 1, 2, 0], [3, 0, 4]] };
+    const d: Draft = { dots: pt(5), paths: [[0, 1, 2, 0], [3, 0, 4]], groups: [0, 1] };
     const back = unmergeDot(d, 0, { w: 1000, h: 1000 });
     expect(back.paths[0]).toEqual([0, 1, 2, 0]);
     expect(back.paths[1]).toEqual([3, 5, 4]);
   });
 
   it('cuts an open line in two, the second part right after the first', () => {
-    const d: Draft = { dots: pt(6), paths: [[0, 1, 2, 3], [4, 5]] };
+    const d: Draft = { dots: pt(6), paths: [[0, 1, 2, 3], [4, 5]], groups: [0, 1] };
     const out = cutSegment(d, 0, 1);
     expect(out.paths).toEqual([[0, 1], [2, 3], [4, 5]]);
     expect(dotLabels(out, 'jumps')).toEqual(['1', '2', '3', '4', '5', '6']);
   });
 
   it('opens a loop at the cut', () => {
-    const d: Draft = { dots: pt(4), paths: [[0, 1, 2, 3, 0]] };
+    const d: Draft = { dots: pt(4), paths: [[0, 1, 2, 3, 0]], groups: [0] };
     expect(cutSegment(d, 0, 1).paths).toEqual([[2, 3, 0, 1]]);
     expect(cutSegment(d, 0, 3).paths).toEqual([[0, 1, 2, 3]]);
   });
 
   it('drops a dot left alone by a cut at the end of a line', () => {
-    const d: Draft = { dots: pt(4), paths: [[0, 1, 2, 3]] };
+    const d: Draft = { dots: pt(4), paths: [[0, 1, 2, 3]], groups: [0] };
     const out = cutSegment(d, 0, 2);
     expect(out.dots).toHaveLength(3);
     expect(out.paths).toEqual([[0, 1, 2]]);
+  });
+});
+
+describe('contours', () => {
+  const pt = (n: number): Pt[] => Array.from({ length: n }, (_, i) => [i * 10, i] as Pt);
+
+  it('keeps a colour for every line through the edits', () => {
+    expect(deleteDot(d, 4).groups).toEqual([0]); // the tail was the second contour, it is gone
+    const two: Draft = { dots: pt(6), paths: [[0, 1, 2, 3], [4, 5]], groups: [0, 1] };
+    expect(cutSegment(two, 0, 1).groups).toEqual([0, 0, 1]);
+    expect(startAt(d, 4).groups).toEqual([1, 0]);
+    const joined = mergeDots({ dots: pt(6), paths: [[0, 1, 2], [3, 4, 5]], groups: [1, 0] }, 2, 3);
+    expect(joined.draft.groups).toEqual([1]); // the first line's colour wins
+  });
+
+  it('counts inside a contour in colour mode, across all of its lines', () => {
+    expect(dotLabels(d, 'color')).toEqual(['1/5', '2', '3', '4', '1', '2']);
+    const same: Draft = { dots: pt(6), paths: [[0, 1, 2], [3, 4, 5]], groups: [0, 0] };
+    expect(dotLabels(same, 'color')).toEqual(['1', '2', '3', '4', '5', '6']);
+    const apart: Draft = { ...same, groups: [0, 1] };
+    expect(dotLabels(apart, 'color')).toEqual(['1', '2', '3', '1', '2', '3']);
+    expect(dotLabelRuns(d, 'color')[0]).toEqual([
+      { text: '1', group: 0 },
+      { text: '5', group: 0 },
+    ]);
+    expect(dotLabelRuns(d, 'jumps')[0]).toEqual([{ text: '1/5', group: 0 }]);
+  });
+
+  it('reads a plan of either version', () => {
+    const page = { w: 100, h: 100 };
+    const v2 = { v: 2 as const, page, dotR: 2, dots: pt(4), paths: [[0, 1], [2, 3]], groups: [1, 1], colors: ['#000000', '#ff0000'], lines: [] };
+    expect(draftOf(v2).groups).toEqual([1, 1]);
+    expect(planColors(v2)).toEqual(['#000000', '#ff0000']);
+    const v1 = { v: 1 as const, page, dotR: 2, dots: pt(4), paths: [[0, 1], [2, 3]], lines: [] };
+    expect(draftOf(v1).groups).toEqual([0, 1]);
+    expect(planColors(v1)).toEqual([INK_HEX, INK_HEX]);
   });
 });

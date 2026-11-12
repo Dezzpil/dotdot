@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { redisOptions } from '../config.js';
 import { normalizeOptions } from './create-job.dto.js';
@@ -46,10 +47,12 @@ describe('options and config', () => {
   it('fills defaults', () => {
     expect(normalizeOptions({ level: 'kid' })).toEqual({
       mode: 'auto',
-      numbering: 'jumps',
+      strategy: 'auto',
+      numbering: 'color',
       level: 'kid',
       labels: 'numbers',
       lang: 'ru',
+      math_max: 100,
     });
   });
   it('parses redis urls', () => {
@@ -61,15 +64,24 @@ describe('options and config', () => {
 describe('checkEdit', () => {
   const page = { w: 595, h: 842 };
   it('normalises good edits', () => {
-    const r = checkEdit({ dots: [[10.123, 20], [30, 40], [50, 60]], paths: [[0, 0, 1, 2], [2]] }, page);
-    expect(r).toEqual({ dots: [[10.12, 20], [30, 40], [50, 60]], paths: [[0, 1, 2]] });
+    const r = checkEdit({ dots: [[10.123, 20], [30, 40], [50, 60]], paths: [[0, 0, 1, 2], [2]], groups: [0, 1] }, page, 2);
+    expect(r).toEqual({ dots: [[10.12, 20], [30, 40], [50, 60]], paths: [[0, 1, 2]], groups: [0] });
   });
   it('explains bad ones', () => {
-    expect(checkEdit({ dots: [[1e6, 0]], paths: [] }, page)).toContain('outside');
-    expect(checkEdit({ dots: [['x', 0]], paths: [] }, page)).toContain('[x, y]');
-    expect(checkEdit({ dots: [[1, 1]], paths: [[0, 3]] }, page)).toContain('missing');
-    expect(checkEdit({ dots: [[1, 1]], paths: [[0.5]] }, page)).toContain('indices');
-    expect(checkEdit({ dots: [[1, 1]], paths: [[0]] }, page)).toContain('no dots');
-    expect(checkEdit({ dots: Array(1501).fill([1, 1]), paths: [] }, page)).toContain('too many');
+    const edit = (paths: unknown[], groups: unknown[], dots: unknown[] = [[1, 1]]) => checkEdit({ dots, paths, groups }, page, 2);
+    expect(edit([], [], [[1e6, 0]])).toContain('outside');
+    expect(edit([], [], [['x', 0]])).toContain('[x, y]');
+    expect(edit([[0, 3]], [0])).toContain('missing');
+    expect(edit([[0.5]], [0])).toContain('indices');
+    expect(edit([[0]], [0])).toContain('no dots');
+    expect(edit([], [], Array(1501).fill([1, 1]))).toContain('too many');
+  });
+  it('keeps groups in step with the lines', () => {
+    const edit = (groups: unknown[]) => checkEdit({ dots: [[1, 1], [2, 2]], paths: [[0, 1]], groups }, page, 2);
+    expect(edit([0])).toEqual({ dots: [[1, 1], [2, 2]], paths: [[0, 1]], groups: [0] });
+    expect(edit([0, 1])).toContain('every line');
+    expect(edit([2])).toContain('colour index');
+    expect(edit(['0'])).toContain('colour index');
+    expect(edit([-1])).toContain('colour index');
   });
 });

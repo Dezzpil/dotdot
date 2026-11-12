@@ -8,8 +8,9 @@ import {
   clampToPage,
   cutSegment,
   deleteDot,
-  dotLabels,
+  dotLabelRuns,
   Draft,
+  draftOf,
   history,
   insertDot,
   mergeDots,
@@ -17,6 +18,7 @@ import {
   nearestDot,
   nearestSegment,
   PlanDoc,
+  planColors,
   Pt,
   startAt,
   starts,
@@ -96,7 +98,7 @@ export function Editor(props: {
   const { t } = useI18n();
   const { plan } = props;
   const { w, h } = plan.page;
-  const initial = useMemo<Draft>(() => ({ dots: plan.dots, paths: plan.paths }), [plan]);
+  const initial = useMemo<Draft>(() => draftOf(plan), [plan]);
   const [hist, dispatch] = useReducer(history, { past: [], present: initial, future: [] });
   const d = hist.present;
   const latest = useRef(d);
@@ -133,8 +135,25 @@ export function Editor(props: {
   // the selection may point past the end after undo or delete
   const selected = sel !== null && sel < d.dots.length ? sel : null;
   const picked = pick !== null && pick < d.dots.length ? pick : null;
-  const labels = useMemo(() => dotLabels(d, props.numbering), [d, props.numbering]);
+  const labels = useMemo(() => dotLabelRuns(d, props.numbering), [d, props.numbering]);
   const ringed = useMemo(() => starts(d), [d]);
+  const colors = useMemo(() => planColors(plan), [plan]);
+  // one object needs no colour: it is just 1…N in black, like on the sheet
+  const colored = props.numbering === 'color' && new Set(d.groups).size > 1;
+  const dotGroup = useMemo(() => {
+    const g = d.dots.map(() => 0);
+    const seen = new Set<number>();
+    d.paths.forEach((p, si) =>
+      p.forEach((di) => {
+        if (!seen.has(di)) {
+          seen.add(di);
+          g[di] = d.groups[si] ?? 0;
+        }
+      }),
+    );
+    return g;
+  }, [d]);
+  const ink = (gi: number) => (colored ? colors[gi] : undefined);
 
   const toPage = (e: { clientX: number; clientY: number }): Pt => {
     const r = svgRef.current!.getBoundingClientRect();
@@ -406,6 +425,11 @@ export function Editor(props: {
               className="ed-source"
             />
           )}
+          <g className="ed-solid">
+            {(plan.solids ?? []).map((poly, i) => (
+              <polygon key={i} points={poly.map((p) => p.join(',')).join(' ')} />
+            ))}
+          </g>
           <g className="ed-plain">
             {plan.lines.map((ln, i) => (
               <polyline key={i} points={ln.map((p) => p.join(',')).join(' ')} />
@@ -413,7 +437,7 @@ export function Editor(props: {
           </g>
           <g className="ed-paths">
             {d.paths.map((p, i) => (
-              <polyline key={i} points={p.map((k) => d.dots[k].join(',')).join(' ')} />
+              <polyline key={i} points={p.map((k) => d.dots[k].join(',')).join(' ')} style={{ stroke: ink(d.groups[i] ?? 0) }} />
             ))}
           </g>
           <g className="ed-dots">
@@ -421,19 +445,21 @@ export function Editor(props: {
               <g key={i} className={i === selected ? 'is-sel' : undefined} data-testid={`dot-${i}`}>
                 {i === selected && <circle cx={x} cy={y} r={dotR + Math.max(3, 6 / scale)} className="ed-sel" />}
                 {i === picked && <circle cx={x} cy={y} r={dotR + Math.max(3, 7 / scale)} className="ed-pick" data-testid="dot-picked" />}
-                {ringed.has(i) && d.paths.length > 1 && <circle cx={x} cy={y} r={dotR + 2} className="ed-ring" />}
-                <circle cx={x} cy={y} r={dotR} className="ed-dot" />
+                {ringed.has(i) && d.paths.length > 1 && <circle cx={x} cy={y} r={dotR + 2} className="ed-ring" style={{ stroke: ink(dotGroup[i]) }} />}
+                <circle cx={x} cy={y} r={dotR} className="ed-dot" style={i === selected ? undefined : { fill: ink(dotGroup[i]) }} />
                 <circle cx={x} cy={y} r={hitR} className="ed-hit" />
               </g>
             ))}
           </g>
           {showNumbers && (
             <g className="ed-labels" style={{ fontSize }}>
-              {d.dots.map(([x, y], i) => (
-                <text key={i} x={x + dotR + 1.2} y={y - dotR - 1}>
-                  {labels[i]}
-                </text>
-              ))}
+              {d.dots.map(([x, y], i) =>
+                labels[i].map((run, j) => (
+                  <text key={`${i}-${j}`} x={x + dotR + 1.2} y={y - dotR - 1 + j * fontSize * 1.1} style={{ fill: ink(run.group) }}>
+                    {run.text}
+                  </text>
+                )),
+              )}
             </g>
           )}
         </svg>
@@ -442,7 +468,7 @@ export function Editor(props: {
       <div className="ed-footer">
         {selected !== null ? (
           <div className="ed-selected" data-testid="panel-selected">
-            <strong>{t.selectedDot(labels[selected] || String(selected + 1))}</strong>
+            <strong>{t.selectedDot(labels[selected].map((r) => r.text).join('/') || String(selected + 1))}</strong>
             <button
               type="button"
               className="btn-ghost btn-small"

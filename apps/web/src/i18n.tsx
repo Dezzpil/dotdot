@@ -28,17 +28,28 @@ const ru = {
   replace: 'Заменить',
   forWhom: 'Для кого рисунок?',
   levels: {
-    kid: { name: 'Малыш', age: '4–6 лет', hint: 'до 50 крупных точек, только контур' },
-    school: { name: 'Школьник', age: '7–10 лет', hint: 'около 150 точек, всё точками' },
-    adult: { name: 'Взрослый', age: '11+', hint: '300 точек и больше, мелкие детали' },
+    kid: { name: 'Малыш', age: '4–6 лет', hint: 'крупные точки, только контур' },
+    school: { name: 'Школьник', age: '7–10 лет', hint: 'точки помельче, больше деталей' },
+    adult: { name: 'Взрослый', age: '11+', hint: 'мелкие точки, все детали' },
   },
+  levelsNote: 'Для каждого уровня — пять листов на выбор, от простого к подробному.',
   more: 'Тонкая настройка',
   modeTitle: 'Что превратить в точки',
-  modes: { auto: 'Как задумано для уровня', all: 'Весь рисунок', outline: 'Только контур, детали линиями' },
+  modes: { auto: 'Как задумано для уровня', all: 'Весь рисунок, сколько поместится', outline: 'Только контур, детали линиями' },
+  modeHint: 'Точек конечное число: главные фигуры — точками, остальное напечатаем линиями. Чем больше точек в варианте, тем больше рисунка точками.',
+  strategyTitle: 'Как разделить рисунок на объекты',
+  strategies: { auto: 'Авто', subject: 'Один объект', classes: 'Объект и детали', components: 'Каждый объект отдельно' },
+  strategyLabel: 'Объекты:',
+  strategyChosen: (name: string) => `выбрано: ${name}`,
   numberingTitle: 'Нумерация',
-  numberings: { jumps: 'Одна цепочка с «прыжками»', series: 'Отдельные серии: A1, B1…' },
+  numberings: { jumps: 'Одна цепочка с «прыжками»', color: 'Свой цвет и счёт у каждого контура', series: 'Отдельные серии: A1, B1…' },
   labelsTitle: 'Подписи у точек',
   labelsOpts: { numbers: 'Числа', math: 'Примеры: 2+3' },
+  mathMaxTitle: 'Ответ в примерах не больше',
+  mathMaxHint: 'Крупный контур упростим, чтобы номера не выросли больше этого числа',
+  targetTitle: 'Примерное число точек',
+  targetPlaceholder: 'авто',
+  targetHint: 'Пусто — подберём сами. Со своим числом будет три варианта: поменьше, столько и побольше.',
   pdfLangTitle: 'Язык листа',
   pdfLangs: { ru: 'Русский', en: 'English' },
   go: 'Расставить точки',
@@ -64,6 +75,8 @@ const ru = {
   statDots: 'точек',
   statLines: (n: number) => plural(n, 'линия', 'линии', 'линий'),
   statLinesHint: 'новая линия начинается с кружка',
+  statContours: (n: number) => plural(n, 'контур', 'контура', 'контуров'),
+  statContoursHint: 'каждый контур своего цвета, счёт внутри него с 1',
   download: 'Скачать PDF',
   downloadHint: 'два листа A4: задание и ответ',
   again: 'Другой уровень',
@@ -71,6 +84,25 @@ const ru = {
   keptFor: (h: number) => `Рисунок и результат хранятся ${h} ч, потом удаляются сами.`,
   edit: 'Поправить точки',
   editedNote: 'Версия с вашими правками',
+
+  pickTitle: 'Выберите, сколько точек',
+  pickLead: (n: number) =>
+    n === 1
+      ? 'Рисунок простой, вариантов получился один. Нажмите на лист, чтобы открыть.'
+      : `${n} ${plural(n, 'лист', 'листа', 'листов')} одного рисунка — от простого к подробному. Нажмите на тот, что по силам.`,
+  pickProgress: (done: number, total: number) => `Готово ${done} из ${total}`,
+  pickRange: (lo: number, hi: number) =>
+    lo === hi ? `Рисунок держит только ${lo} ${plural(lo, 'точку', 'точки', 'точек')}.` : `Рисунок держит от ${lo} до ${hi} точек.`,
+  pickCustomHint: 'Ни один не подошёл? Вернитесь к настройкам и задайте своё число точек в тонкой настройке.',
+  variantQueued: 'в очереди',
+  variantWorking: 'считаем',
+  variantReady: 'готово',
+  variantFailed: 'не получилось',
+  variantAim: (n: number) => `цель ${n}`,
+  variantPick: 'Выбрать этот',
+  variantDefault: 'как для уровня',
+  variantYours: 'ваше число',
+  otherVariant: 'Другой вариант',
 
   editTitle: 'Редактор точек',
   editLead: 'Подвиньте, добавьте или уберите точки — номера пересчитаются сами.',
@@ -126,6 +158,7 @@ const ru = {
     BAD_IMAGE: 'Не получилось разглядеть линии. Лучше всего подходят чёткие чёрные контуры на белом фоне.',
     BAD_OPTIONS: 'Что-то не так с настройками. Обновите страницу и попробуйте ещё раз.',
     BAD_PLAN: 'С точками что-то не так. Отмените последние правки и попробуйте ещё раз.',
+    BAD_SCENE: 'Не получилось прочитать рисунок для вариантов. Загрузите картинку ещё раз.',
     BUSY: 'Сейчас очень много рисунков. Попробуйте через минуту — мы никуда не денемся.',
     RATE_LIMITED: (sec?: number) =>
       sec ? `Много рисунков подряд. Передохните ${sec} ${plural(sec, 'секунду', 'секунды', 'секунд')} и продолжим.` : 'Много рисунков подряд. Передохните минутку и продолжим.',
@@ -170,17 +203,28 @@ const en: Dict = {
   replace: 'Replace',
   forWhom: 'Who is it for?',
   levels: {
-    kid: { name: 'Little one', age: 'ages 4–6', hint: 'up to 50 big dots, outline only' },
-    school: { name: 'Schoolkid', age: 'ages 7–10', hint: 'about 150 dots, everything dotted' },
-    adult: { name: 'Grown-up', age: '11+', hint: '300+ dots, fine details' },
+    kid: { name: 'Little one', age: 'ages 4–6', hint: 'big dots, outline only' },
+    school: { name: 'Schoolkid', age: 'ages 7–10', hint: 'smaller dots, more detail' },
+    adult: { name: 'Grown-up', age: '11+', hint: 'tiny dots, every detail' },
   },
+  levelsNote: 'Every level comes with five sheets to choose from, simple to detailed.',
   more: 'Fine-tune',
   modeTitle: 'What becomes dots',
-  modes: { auto: 'Best for the level', all: 'The whole drawing', outline: 'Outline only, details as lines' },
+  modes: { auto: 'Best for the level', all: 'Whole drawing, as far as it fits', outline: 'Outline only, details as lines' },
+  modeHint: 'Dots are a limited budget: the main shapes become dots, the rest is pre-printed as lines. The more dots a variant has, the more of the drawing is dotted.',
+  strategyTitle: 'How to split the drawing into objects',
+  strategies: { auto: 'Auto', subject: 'One object', classes: 'Object and details', components: 'Every object apart' },
+  strategyLabel: 'Objects:',
+  strategyChosen: (name: string) => `picked: ${name}`,
   numberingTitle: 'Numbering',
-  numberings: { jumps: 'One chain with “jumps”', series: 'Separate series: A1, B1…' },
+  numberings: { jumps: 'One chain with “jumps”', color: 'Its own colour and count per contour', series: 'Separate series: A1, B1…' },
   labelsTitle: 'Dot labels',
   labelsOpts: { numbers: 'Numbers', math: 'Sums: 2+3' },
+  mathMaxTitle: 'Largest answer in the sums',
+  mathMaxHint: 'A big contour gets simplified so the numbers stay below this',
+  targetTitle: 'Approximate dot count',
+  targetPlaceholder: 'auto',
+  targetHint: 'Leave it empty and we pick. With your own number you get three variants: fewer, that many, more.',
   pdfLangTitle: 'Sheet language',
   pdfLangs: { ru: 'Русский', en: 'English' },
   go: 'Place the dots',
@@ -206,6 +250,8 @@ const en: Dict = {
   statDots: 'dots',
   statLines: (n: number) => (n === 1 ? 'line' : 'lines'),
   statLinesHint: 'a ring marks where a new line starts',
+  statContours: (n: number) => (n === 1 ? 'contour' : 'contours'),
+  statContoursHint: 'every contour has its own colour and counts from 1',
   download: 'Download PDF',
   downloadHint: 'two A4 sheets: puzzle and answer',
   again: 'Another level',
@@ -213,6 +259,25 @@ const en: Dict = {
   keptFor: (h: number) => `Your drawing and result are kept for ${h} h, then deleted automatically.`,
   edit: 'Edit dots',
   editedNote: 'Your edited version',
+
+  pickTitle: 'Pick how many dots',
+  pickLead: (n: number) =>
+    n === 1
+      ? 'A simple drawing — it only made one version. Tap the sheet to open it.'
+      : `${n} sheets of the same drawing, from simple to detailed. Tap the one that fits.`,
+  pickProgress: (done: number, total: number) => `${done} of ${total} ready`,
+  pickRange: (lo: number, hi: number) =>
+    lo === hi ? `This drawing only carries ${lo} dots.` : `This drawing carries ${lo} to ${hi} dots.`,
+  pickCustomHint: 'None of them fit? Go back to the settings and set your own dot count under Fine-tune.',
+  variantQueued: 'in line',
+  variantWorking: 'working',
+  variantReady: 'ready',
+  variantFailed: 'didn’t work',
+  variantAim: (n: number) => `aimed at ${n}`,
+  variantPick: 'Pick this one',
+  variantDefault: 'just right for the level',
+  variantYours: 'your number',
+  otherVariant: 'Another variant',
 
   editTitle: 'Dot editor',
   editLead: 'Move, add or remove dots — the numbers update by themselves.',
@@ -267,6 +332,7 @@ const en: Dict = {
     BAD_IMAGE: 'We couldn’t make out the lines. Crisp black outlines on white work best.',
     BAD_OPTIONS: 'Something is off with the settings. Reload the page and try again.',
     BAD_PLAN: 'Something is off with the dots. Undo the last changes and try again.',
+    BAD_SCENE: 'We couldn’t read the drawing for the variants. Upload the picture again.',
     BUSY: 'Lots of drawings right now. Try again in a minute — we’ll be here.',
     RATE_LIMITED: (sec?: number) =>
       sec ? `That’s a lot of drawings in a row. Take a ${sec}-second break and carry on.` : 'That’s a lot of drawings in a row. Take a short break and carry on.',
@@ -336,6 +402,7 @@ export function errorText(t: Dict, code: string, ctx: { maxUploadMb: number; ret
     case 'BAD_IMAGE':
     case 'BAD_OPTIONS':
     case 'BAD_PLAN':
+    case 'BAD_SCENE':
     case 'BUSY':
     case 'NOT_FOUND':
     case 'TIMEOUT':
