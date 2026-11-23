@@ -131,7 +131,9 @@ set -a
 . "$ENV_FILE"
 set +a
 [ -n "${STORAGE_DIR:-}" ] || die "в .env не задан STORAGE_DIR (общий каталог API и воркеров)"
-PORT="${PORT:-3000}"
+[ -n "${PORT:-}" ] || die "в .env не задан PORT: из него рендерится nginx и его же читает pm2 —
+без явного значения порт рискует разойтись с конфигом прокси. Добавьте PORT=3000
+(см. deploy/pm2/env.example)."
 
 log "Деплой $APP_DIR"
 info "env: $ENV_FILE, storage: $STORAGE_DIR, порт API: $PORT"
@@ -185,7 +187,11 @@ for _ in {1..20}; do
   if health=$(curl -fsS --max-time 3 "http://127.0.0.1:$PORT/api/health" 2>/dev/null); then break; fi
   sleep 1
 done
-[ -n "$health" ] || die "API не ответил на http://127.0.0.1:$PORT/api/health — смотрите: pm2 logs dotdot-api --err"
+[ -n "$health" ] || die "API не ответил на http://127.0.0.1:$PORT/api/health.
+Порт занят чужим процессом?  ss -ltnp | grep ':$PORT'
+pm2 поднял старый снимок окружения?  pm2 env 0 | grep '^PORT='
+Лечится: pm2 delete dotdot-api && pm2 start $APP_DIR/deploy/pm2/ecosystem.config.cjs --update-env
+Логи: pm2 logs dotdot-api --err"
 info "$health"
 case "$health" in
   *'"ok":true'*) ;;

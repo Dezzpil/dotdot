@@ -221,7 +221,7 @@ Docker-путь выше остаётся рабочим и независимы
 
 ```
 nginx (80/443, certbot) ──┬─ /       → apps/web/dist
-                          └─ /api/*  → 127.0.0.1:3000   pm2 dotdot-api (cluster ×2)
+                          └─ /api/*  → 127.0.0.1:$PORT   pm2 dotdot-api (cluster ×2)
 redis-server 127.0.0.1:6379 ── очередь BullMQ ──┤
 STORAGE_DIR ── загрузки и результаты, TTL 24 ч ─┴── pm2 dotdot-worker-N (python, по ядру)
 ```
@@ -323,14 +323,16 @@ certbot дописывает TLS прямо в установленный фай
 
 ### 7. Файрвол
 
-API слушает `0.0.0.0:3000` (так задано в `apps/api/src/main.ts`), снаружи порт закрывает ufw:
+API по умолчанию слушает `127.0.0.1:$PORT` (`PORT` и `BIND` из `.env`, `apps/api/src/config.ts`),
+то есть наружу порт не открывается вовсе — nginx ходит до него локально. Снаружи закрываем 80/443:
 
 ```bash
 sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw enable
 sudo ufw status verbose      # Default: deny (incoming)
 ```
 
-Проверять надо **с другой машины**: `nc -vz -w 5 <IP> 3000` должен дать таймаут.
+Проверка — **с другой машины**, и только если порт подняли наружу (`BIND=0.0.0.0`):
+`nc -vz -w 5 <IP> "$PORT"` должен дать таймаут.
 `curl` с сервера на собственный публичный IP ничего не проверяет: ядро маршрутизирует такой
 пакет через loopback (`ip route get <IP>` → `local ... dev lo`), а ufw безусловно разрешает `lo`
 в `/etc/ufw/before.rules`.
@@ -363,7 +365,8 @@ API перезапускается через `pm2 reload` в cluster-режим
 | Симптом | Что проверить |
 |---|---|
 | 403 на `/` | `sudo chmod o+x /home/dotdot`; `sudo -u www-data cat /home/dotdot/app/apps/web/dist/index.html` |
-| 502 на `/api/*` | `pm2 ls`, `pm2 logs dotdot-api --err`, `curl -s 127.0.0.1:3000/api/health` |
+| 502 на `/api/*` | `pm2 ls`, `pm2 logs dotdot-api --err`, `curl -s "127.0.0.1:$PORT/api/health"` |
+| API слушает не тот порт, что в `.env` | `pm2 env 0` показывает снимок pm2, `ss -ltnp` — чужой процесс на порту; лечится `./deploy.sh --no-deps`, экосистема перечитывает `.env` при каждом запуске |
 | `deploy.sh` ругается на `.env` | inline-комментарии или незакавыченные `&`, `$`: bash прочитает значение иначе, чем Node |
 | Задачи висят в `queued` | `pm2 logs dotdot-worker-1`; `QUEUE_NAME`/`QUEUE_PREFIX` совпадают у API и воркера; `maxmemory-policy=noeviction` |
 | Воркер падает при старте | `bash deploy/pm2/run-worker.sh` руками: обычно нет venv или `libcairo2` |
@@ -373,7 +376,7 @@ API перезапускается через `pm2 reload` в cluster-режим
 | Воркеры мешают друг другу | `OMP/OPENBLAS/MKL_NUM_THREADS=1` в ecosystem |
 | Все пользователи — один IP, общий лимит | `TRUST_PROXY`: 1 для nginx, 2 для Cloudflare → nginx |
 | После перезагрузки ничего не поднялось | не выполнены `pm2 startup` и `pm2 save` |
-| Порт 3000 виден снаружи | `sudo ufw status` — active, default deny incoming |
+| Порт API виден снаружи | по умолчанию `BIND=127.0.0.1`; если ставили `0.0.0.0` — `sudo ufw status` (active, default deny incoming) |
 
 ## Develop locally
 

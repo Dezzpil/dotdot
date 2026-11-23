@@ -34,6 +34,7 @@ The cache key is still `sha256(file + options)`, now pointing at the set: the sa
 | Var | Default | |
 |---|---|---|
 | `PORT` | 3000 | |
+| `BIND` | 127.0.0.1 | interface to listen on; the Docker image sets `0.0.0.0` so Caddy can reach it |
 | `REDIS_URL` | redis://localhost:6379 | |
 | `QUEUE_NAME` / `QUEUE_PREFIX` | dots / dotdot | must match the worker |
 | `STORAGE_DIR` | /data | volume shared with workers |

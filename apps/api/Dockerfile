@@ -7,7 +7,8 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-alpine
-ENV NODE_ENV=production PORT=3000 STORAGE_DIR=/data
+# BIND: caddy приходит на имя api по docker-сети, loopback снаружи не годится
+ENV NODE_ENV=production PORT=3000 STORAGE_DIR=/data BIND=0.0.0.0
 WORKDIR /app
 # same uid as the worker: both write to the shared /data volume
 RUN addgroup -g 10001 dotdot && adduser -D -u 10001 -G dotdot dotdot \

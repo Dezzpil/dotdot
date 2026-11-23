@@ -1,5 +1,7 @@
 export interface AppConfig {
   port: number;
+  /** nginx/Caddy стоит на этой же машине, поэтому наружу не слушаем по умолчанию. */
+  host: string;
   redisUrl: string;
   queueName: string;
   queuePrefix: string;
@@ -28,6 +30,7 @@ function trustProxy(v: string | undefined): string | number | boolean {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     port: int(env.PORT, 3000),
+    host: opt(env.BIND) ?? '127.0.0.1',
     redisUrl: env.REDIS_URL ?? 'redis://localhost:6379',
     queueName: env.QUEUE_NAME ?? 'dots',
     queuePrefix: env.QUEUE_PREFIX ?? 'dotdot',
