@@ -153,6 +153,21 @@ async def process(job, token):
     return {"files": {k: f"{job_id}/{v}" for k, v in files.items()}, "stats": res.stats}
 
 
+def on_failed(job, err):
+    """BullMQ stays silent about failures: without this a broken job just never shows in the log."""
+    log.error("job %s (%s) failed on attempt %s/%s: %s: %s",
+              job.id, job.name, job.attemptsMade, job.attempts, type(err).__name__, err)
+
+
+def on_error(err, job=None):
+    """Errors of the fetch loop itself: the worker keeps running, so log them loudly."""
+    log.error("worker error%s: %s: %s", f" in job {job.id}" if job is not None else "", type(err).__name__, err)
+
+
+def on_stalled(job_id):
+    log.warning("job %s lost its lock (worker restarted while running it?): it goes back to the queue", job_id)
+
+
 async def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -165,6 +180,9 @@ async def main() -> None:
         "lockDuration": 30000,
         "name": os.environ.get("HOSTNAME", "worker"),
     })
+    worker.on("failed", on_failed)
+    worker.on("error", on_error)
+    worker.on("stalled", on_stalled)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
